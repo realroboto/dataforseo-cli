@@ -270,7 +270,7 @@ export async function call(
       : undefined;
   const est: Estimate = free
     ? { usd: 0, basis: 'rule' }
-    : estimate(rule, planned.body ?? [], price?.tree);
+    : estimate(rule, planned.body ?? [], price?.tree, (io.now ?? Date.now)());
   if (est.warning) warnEarly(est.warning);
   const refusal = free ? undefined : guard(ep.path, est, ceiling, explicit !== undefined);
   if (flags['dry-run']) {

@@ -20,7 +20,31 @@ const NOON = '2026-11-07T12:00:00.000Z';
 // Cut from a real user_data price tree (2026-11-07): money and rates dropped.
 const leaf = (cost: number) => [{ cost_type: 'per_request', cost }];
 const allPriorities = (l: unknown) => ({ priority_low: l, priority_normal: l, priority_high: l });
+const item = (task: number, result: number) =>
+  allPriorities([
+    { cost_type: 'per_result', cost: result },
+    { cost_type: 'per_request', cost: task },
+  ]);
 const PRICE = {
+  dataforseo_labs: {
+    ranked_keywords: { live: item(0.012, 0.00012) },
+    keyword_ideas: { live: item(0.012, 0.00012) },
+    top_searches: { live: item(0.012, 0.00012) },
+    historical_serps: { live: item(0, 0.00012) },
+    bulk_keyword_difficulty: { live: item(0.012, 0.00012) },
+    historical_keyword_data: { live: item(0.012, 0.00012) },
+    historical_rank_overview: { live: item(0.12, 0.0012) },
+  },
+  backlinks: {
+    summary: { live: item(0.024, 0.000036) },
+    anchors: { live: item(0.024, 0.000036) },
+    history: { live: item(0.024, 0.000036) },
+    timeseries_summary: { live: item(0.024, 0.000036) },
+  },
+  domain_analytics: {
+    technologies: { domain_technologies: { live: allPriorities(leaf(0.012)) } },
+    whois: { overview: { live: item(0.12, 0.0012) } },
+  },
   keywords_data: {
     search_volume: { task_post: allPriorities(leaf(0.06)) },
     google_ads: { search_volume: { live: allPriorities(leaf(0.09)) } },
@@ -167,16 +191,16 @@ test('estimate above the ceiling exits 4 and sends nothing; --max-cost, DFS_MAX_
 
 test('unknown price exits 4 unless --max-cost is explicit; DFS_MAX_COST does not unlock it', async () => {
   const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.02, tasks: [] }));
-  const anchors = ['backlinks', 'anchors', 'live', '--body', '{"target":"forbes.com"}'];
+  const search = ['content_analysis', 'search', 'live', '--body', '{"keyword":"seo"}'];
   const e = env({ DFS_MAX_COST: '5' });
-  const r = await dfs(anchors, { env: e, fetch });
+  const r = await dfs(search, { env: e, fetch });
   assert.equal(r.code, 4);
   assert.equal(
     r.stderr,
-    'dfs: price of /v3/backlinks/anchors/live unknown — pass --max-cost <usd> to send, or --sandbox\n',
+    'dfs: price of /v3/content_analysis/search/live unknown — pass --max-cost <usd> to send, or --sandbox\n',
   );
   assert.equal(calls.length, 0);
-  const sent = await dfs([...anchors, '--max-cost', '0.01'], { env: e, fetch });
+  const sent = await dfs([...search, '--max-cost', '0.01'], { env: e, fetch });
   assert.equal(sent.code, 0, sent.stderr);
   assert.match(sent.stderr, / est=\$\? saved=r_/);
   assert.doesNotMatch(sent.stderr, /warning/, 'no estimate: no real-cost comparison');
@@ -312,6 +336,10 @@ test('free list paths never hit the guard, even with a $0 ceiling', async () => 
     ['appendix', 'user_data'],
     ['appendix', 'webhook_resend', '--body', '{}', '--no-validate'],
     ['serp', 'google', 'organic', 'tasks_fixed'],
+    ['backlinks', 'index'],
+    ['backlinks', 'available_filters'],
+    ['dataforseo_labs', 'google', 'available_history'],
+    ['domain_analytics', 'technologies', 'technologies'],
   ];
   for (const w of words) {
     const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0, tasks: [] }));
@@ -329,9 +357,9 @@ test('free list paths never hit the guard, even with a $0 ceiling', async () => 
 });
 
 // shortcut: no shipped rule is unbounded, so this checks guard() directly; move it to run() when
-// tickets 06–07 add the first unbounded rule (serp and keywords_data have none).
+// ticket 07 adds the first unbounded rule (tickets 05–06 modules have none).
 test('an unbounded rule is refused like an unknown price unless --max-cost is explicit', () => {
-  const est = estimate({ path: '/v3/x/live', node: ['x'], unbounded: true }, [{}], PRICE);
+  const est = estimate({ path: '/v3/x/live', node: ['x'], unbounded: true }, [{}], PRICE, 0);
   assert.deepEqual(est, { usd: null, basis: 'unbounded' });
   assert.equal(
     guard('/v3/x/live', est, 1, false),
@@ -428,4 +456,62 @@ test('priority 2 and paid parameters raise the estimate', async () => {
   );
   const news = { ...US, news_type: 'world_markets' };
   assert.equal(await usd(e, 'serp google finance_explore task_post', news), 0.0012);
+});
+
+// Labs and Backlinks bill per task plus per item (row) returned; Live only, so no priority.
+test('per_result: limit, input arrays and date spans count the billed items', async () => {
+  const e = env();
+  await loadPrices(e);
+  const rk = 'dataforseo_labs google ranked_keywords live';
+  const site = { ...US, target: 'example.com' };
+  // Absent limit → API default 100: 0.012 + 100 × 0.00012.
+  assert.equal(await usd(e, rk, site), 0.024);
+  assert.equal(await usd(e, rk, { ...site, limit: 1000 }), 0.132);
+  assert.equal(await usd(e, rk, { ...site, limit: 5 }), 0.0126);
+  assert.equal(await usd(e, rk, { ...site, limit: 5000 }), 0.132, 'limit above max 1000');
+  // top_searches: default limit 1000.
+  assert.equal(await usd(e, 'dataforseo_labs google top_searches live', US), 0.132);
+  // keyword_ideas: default limit 700.
+  const ideas = { ...US, keywords: ['pizza'] };
+  assert.equal(await usd(e, 'dataforseo_labs google keyword_ideas live', ideas), 0.096);
+  // One item per input keyword.
+  const kd = { ...US, keywords: ['a', 'b', 'c'] };
+  assert.equal(await usd(e, 'dataforseo_labs google bulk_keyword_difficulty live', kd), 0.01236);
+  // historical_search_volume has no node of its own; Labs general rate, as historical_keyword_data.
+  assert.equal(await usd(e, 'dataforseo_labs google historical_search_volume live', kd), 0.01236);
+  // pricing/backlinks/backlinks: "0.024 + 0.000036 × 1,000 = $0.06"; summary is one row.
+  const forbes = { target: 'forbes.com' };
+  assert.equal(await usd(e, 'backlinks anchors live', { ...forbes, limit: 1000 }), 0.06);
+  assert.equal(await usd(e, 'backlinks summary live', forbes), 0.024036);
+  // Whois: $0.12 + $0.0012 per domain, 100 by default.
+  assert.equal(await usd(e, 'domain_analytics whois overview live', {}), 0.24);
+});
+
+test('date spans: one item per month or per group_range period up to today', async () => {
+  const e = env();
+  await loadPrices(e);
+  // NOON = 2026-11-07. 2026-01 … 2026-11 = 11 months.
+  const forbes = { target: 'forbes.com' };
+  assert.equal(
+    await usd(e, 'backlinks history live', { ...forbes, date_from: '2026-01-15' }),
+    0.024396,
+  );
+  const days = { ...forbes, date_from: '2026-11-01', date_to: '2026-11-07', group_range: 'day' };
+  assert.equal(await usd(e, 'backlinks timeseries_summary live', days), 0.024252);
+  // historical_serps: no task price, at most 13 monthly snapshots: 13 × 0.00012.
+  const serps = { ...US, keyword: 'pizza' };
+  assert.equal(await usd(e, 'dataforseo_labs google historical_serps live', serps), 0.00156);
+  // No date_from: worst case from the earliest date, 2020-10 … 2026-11 = 74 months.
+  const hro = { ...US, target: 'example.com' };
+  assert.equal(await usd(e, 'dataforseo_labs google historical_rank_overview live', hro), 0.2088);
+});
+
+test('per_request and paid flags: domain_technologies is flat; include_clickstream_data doubles', async () => {
+  const e = env();
+  await loadPrices(e);
+  const tech = { target: 'example.com' };
+  assert.equal(await usd(e, 'domain_analytics technologies domain_technologies live', tech), 0.012);
+  // Labs docs: "with this parameter enabled, you will be charged double the price for the request".
+  const site = { ...US, target: 'example.com', include_clickstream_data: true };
+  assert.equal(await usd(e, 'dataforseo_labs google ranked_keywords live', site), 0.048);
 });

@@ -43,6 +43,9 @@ test('--dry-run prints the plan JSON, sends nothing, needs no credentials', asyn
 });
 
 const LOGIN = { DATAFORSEO_LOGIN: 'me@example.com', DATAFORSEO_PASSWORD: 's3cret' };
+// Calls to the endpoint itself; a paid path may first refresh the price tree (user_data).
+const toAnchors = <C extends { url: string }>(calls: C[]) =>
+  calls.filter((c) => c.url.endsWith('/anchors/live'));
 // Runs a call that would send (credentials, --max-cost); the fake fetch counts any send.
 const send = async (words: string[], body: unknown, ...flags: string[]) => {
   const { fetch, calls } = fakeFetch(() => new Response('{"status_code":20000}'));
@@ -127,8 +130,9 @@ test('filters: 9 top-level conditions exit 3 on an "8 filters maximum" field onl
 
 test('--no-validate: an unknown field warns on stderr and is sent; task limits still exit 3', async () => {
   const r = await send(ANCHORS, { ...TASK, colour: 'red' }, '--no-validate');
-  assert.equal(r.calls.length, 1, r.stderr);
-  assert.deepEqual(JSON.parse(String(r.calls[0].init?.body)), [{ ...TASK, colour: 'red' }]);
+  const sent = toAnchors(r.calls);
+  assert.equal(sent.length, 1, r.stderr);
+  assert.deepEqual(JSON.parse(String(sent[0].init?.body)), [{ ...TASK, colour: 'red' }]);
   assert.match(r.stderr, /^dfs: warning: body\[0\]\.colour: unknown field/m);
 
   const over = await send(ANCHORS, many(2, TASK), '--no-validate');
@@ -142,7 +146,7 @@ test('--no-validate: an unknown field warns on stderr and is sent; task limits s
     fetch,
   });
   assert.equal(guarded.code, 4, 'unknown price, no --max-cost: the Cost guard still refuses');
-  assert.equal(calls.length, 0);
+  assert.equal(toAnchors(calls).length, 0);
 
   const down = await dfs([...ANCHORS, '--body', body, '--no-validate', '--max-cost', '1'], {
     env: { DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-plan-')), ...LOGIN },
