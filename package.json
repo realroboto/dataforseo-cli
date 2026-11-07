@@ -1,0 +1,55 @@
+{
+  "name": "@reallroboto/dfs",
+  "version": "0.1.0",
+  "description": "Agent-first CLI for the whole DataForSEO API, generated from the official OpenAPI spec, with a cost guard and a local store.",
+  "type": "module",
+  "bin": {
+    "dfs": "dist/bin/dfs.js"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "format": "biome check --write",
+    "spec:snapshot": "node scripts/spec-snapshot.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir dist/spec && cp spec/snapshot.json spec/overlay.yaml dist/spec/",
+    "pack:check": "node scripts/pack-check.ts",
+    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm pack:check"
+  },
+  "files": [
+    "dist/"
+  ],
+  "keywords": [
+    "dataforseo",
+    "seo",
+    "serp",
+    "backlinks",
+    "keywords",
+    "openapi",
+    "cli"
+  ],
+  "homepage": "https://github.com/realroboto/dataforseo-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/realroboto/dataforseo-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/realroboto/dataforseo-cli/issues"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@12.18.0",
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
