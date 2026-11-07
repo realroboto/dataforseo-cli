@@ -17,10 +17,24 @@ const env = (extra: Record<string, string> = {}) => ({
 const at = (iso: string) => () => Date.parse(iso);
 const NOON = '2026-11-07T12:00:00.000Z';
 
-// Cut from a real user_data price tree (2026-11-07): serp only, money and rates dropped.
+// Cut from a real user_data price tree (2026-11-07): money and rates dropped.
 const leaf = (cost: number) => [{ cost_type: 'per_request', cost }];
+const allPriorities = (l: unknown) => ({ priority_low: l, priority_normal: l, priority_high: l });
 const PRICE = {
+  keywords_data: {
+    search_volume: { task_post: allPriorities(leaf(0.06)) },
+    google_ads: { search_volume: { live: allPriorities(leaf(0.09)) } },
+    clickstream_data: {
+      bulk_search_volume: {
+        live: allPriorities([
+          { cost_type: 'per_result', cost: 0.00012 },
+          { cost_type: 'per_request', cost: 0.012 },
+        ]),
+      },
+    },
+  },
   serp: {
+    screenshot: allPriorities([{ cost_type: 'per_result', cost: 0.004 }]),
     live: {
       advanced: {
         priority_low: leaf(0.002),
@@ -175,7 +189,7 @@ test('a rule node missing from the price tree: unknown price and a warning namin
   assert.equal(r.code, 4);
   assert.match(
     r.stderr,
-    /^dfs: warning: price rule \/v3\/serp\/google\/organic\/live\/advanced: no per_request price at serp\.live\.advanced\.priority_normal in the price tree\n/,
+    /^dfs: warning: price rule \/v3\/serp\/google\/organic\/live\/advanced: no price at serp\.live\.advanced\.priority_normal in the price tree\n/,
   );
 });
 
@@ -315,7 +329,7 @@ test('free list paths never hit the guard, even with a $0 ceiling', async () => 
 });
 
 // shortcut: no shipped rule is unbounded, so this checks guard() directly; move it to run() when
-// tickets 05–07 add the first unbounded rule.
+// tickets 06–07 add the first unbounded rule (serp and keywords_data have none).
 test('an unbounded rule is refused like an unknown price unless --max-cost is explicit', () => {
   const est = estimate({ path: '/v3/x/live', node: ['x'], unbounded: true }, [{}], PRICE);
   assert.deepEqual(est, { usd: null, basis: 'unbounded' });
@@ -324,4 +338,94 @@ test('an unbounded rule is refused like an unknown price unless --max-cost is ex
     'price of /v3/x/live has no upper bound — pass --max-cost <usd> to send, or --sandbox',
   );
   assert.equal(guard('/v3/x/live', est, 1, true), undefined);
+});
+
+// Estimate of one task on the stored tree, read through --dry-run.
+const usd = async (e: NodeJS.ProcessEnv, words: string, task: Record<string, unknown>) => {
+  const argv = [...words.split(' '), '--body', JSON.stringify(task), '--dry-run'];
+  const r = await dfs(argv, { env: e, now: at(NOON) });
+  assert.equal(r.code, 0, `${words}: ${r.stderr}`);
+  return JSON.parse(r.stdout).estimate.usd;
+};
+const US = { location_code: 2840, language_code: 'en' };
+
+test('per_request: a keywords_data task costs the same for 1 or 1000 keywords', async () => {
+  const e = env();
+  await loadPrices(e);
+  const one = { ...US, keywords: ['pizza'] };
+  const many = { ...US, keywords: Array.from({ length: 1000 }, (_, i) => `kw ${i}`) };
+  assert.equal(await usd(e, 'keywords_data google_ads search_volume live', one), 0.09);
+  assert.equal(await usd(e, 'keywords_data google_ads search_volume live', many), 0.09);
+  // Bing search_volume_history has no node of its own; its list price equals search_volume.
+  assert.equal(await usd(e, 'keywords_data bing search_volume_history task_post', one), 0.06);
+});
+
+test('per_result: bulk_search_volume adds the item price per keyword; screenshot bills one', async () => {
+  const e = env();
+  await loadPrices(e);
+  const bulk = { location_code: 2840, keywords: ['a', 'b', 'c'] };
+  // 0.012 + 3 × 0.00012
+  assert.equal(
+    await usd(e, 'keywords_data clickstream_data bulk_search_volume live', bulk),
+    0.01236,
+  );
+  const shot = { task_id: '11071200-1535-0216-0000-5b8c1e2a7f10' };
+  assert.equal(await usd(e, 'serp screenshot', shot), 0.004);
+});
+
+test('depth multipliers: non-organic pages bill full price, organic later pages 25% lower', async () => {
+  const e = env();
+  await loadPrices(e);
+  const pizza = { ...US, keyword: 'pizza' };
+  // Maps: SERPs of 100 results, 250 → 3 × 0.0006.
+  assert.equal(await usd(e, 'serp google maps task_post', { ...pizza, depth: 250 }), 0.0018);
+  // help-center/using-the-stop_crawl_on_match-parameter-in-serp-api: Bing Live depth 100 = $0.0155.
+  assert.equal(await usd(e, 'serp bing organic live advanced', { ...pizza, depth: 100 }), 0.0155);
+  const video = { ...US, video_id: 'dQw4w9WgXcQ' };
+  assert.equal(
+    await usd(e, 'serp youtube video_comments live advanced', { ...video, depth: 40 }),
+    0.004,
+  );
+  // Factors against the shared node: AI Mode 2×, YouTube video_info 3×.
+  assert.equal(await usd(e, 'serp google ai_mode live advanced', pizza), 0.004);
+  assert.equal(await usd(e, 'serp youtube video_info live advanced', video), 0.006);
+});
+
+test('priority 2 and paid parameters raise the estimate', async () => {
+  const e = env();
+  await loadPrices(e);
+  const pizza = { ...US, keyword: 'pizza' };
+  assert.equal(await usd(e, 'serp google maps task_post', { ...pizza, priority: 2 }), 0.0012);
+  // help-center/serp-api-cost-explained: a search operator in "keyword" → base price × 5.
+  const site = { ...US, keyword: 'site:example.com pizza' };
+  assert.equal(await usd(e, 'serp google organic task_post', site), 0.003);
+  assert.equal(await usd(e, 'serp google organic task_post', { ...site, priority: 2 }), 0.006);
+  const minus = { ...US, keyword: 'pizza -site:example.com' };
+  assert.equal(await usd(e, 'serp google organic task_post', minus), 0.003);
+  // load_async_ai_overview: +1 base price; AI Mode calculate_rectangles: × 2 on its 2× factor.
+  const async = { ...pizza, load_async_ai_overview: true };
+  assert.equal(await usd(e, 'serp google organic live advanced', async), 0.004);
+  const rect2 = { ...pizza, calculate_rectangles: true };
+  assert.equal(await usd(e, 'serp google ai_mode task_post', rect2), 0.0024);
+  // 0.0012 × 1.75 (depth 15) + 0.0012 (calculate_rectangles)
+  const rect = { ...pizza, priority: 2, depth: 15, calculate_rectangles: true };
+  assert.equal(await usd(e, 'serp google organic task_post', rect), 0.0033);
+  // 0.002 + 4 clicks × 0.00015
+  const paa = { ...pizza, people_also_ask_click_depth: 4 };
+  assert.equal(await usd(e, 'serp google organic live advanced', paa), 0.0026);
+  assert.equal(
+    await usd(e, 'serp baidu organic task_post', { ...pizza, get_website_url: true }),
+    0.006,
+  );
+  const quote = { ...US, keyword: 'NASDAQ:GOOGL' };
+  assert.equal(
+    await usd(e, 'serp google finance_quote task_post', { ...quote, window: '1M' }),
+    0.0012,
+  );
+  assert.equal(
+    await usd(e, 'serp google finance_quote task_post', { ...quote, window: '1D' }),
+    0.0006,
+  );
+  const news = { ...US, news_type: 'world_markets' };
+  assert.equal(await usd(e, 'serp google finance_explore task_post', news), 0.0012);
 });
