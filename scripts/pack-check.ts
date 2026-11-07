@@ -18,9 +18,19 @@ for (const f of ['dist/bin/dfs.js', 'dist/spec/snapshot.json', 'dist/spec/overla
 }
 
 const { sha, date } = readSnapshot();
-const version = execFileSync('node', [join(root, 'dist/bin/dfs.js'), '--version'], {
-  env: { ...process.env, DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-pack-')) },
-  encoding: 'utf8',
-});
+const dist = (...args: string[]) =>
+  execFileSync('node', [join(root, 'dist/bin/dfs.js'), ...args], {
+    env: { ...process.env, DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-pack-')) },
+    encoding: 'utf8',
+  });
+const version = dist('--version');
 assert.equal(version, `dfs ${pkg.version} (spec ${sha.slice(0, 7)}, ${date.slice(0, 10)})\n`);
+const anchors = {
+  target: 'forbes.com',
+  limit: 4,
+  order_by: ['backlinks,desc'],
+  filters: ['anchor', 'like', '%news%'],
+};
+const plan = dist('backlinks', 'anchors', 'live', '--body', JSON.stringify(anchors), '--dry-run');
+assert.equal(JSON.parse(plan).tasks, 1, 'dist --dry-run of the backlinks/anchors/live example');
 process.stdout.write(`pack check: ok (${files.length} files, ${version.trim()})\n`);

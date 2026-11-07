@@ -92,7 +92,7 @@ test('an endpoint --help shows how to call it', async () => {
   const post = await dfs(['on_page', 'content_parsing', '--help']);
   assert.match(
     post.stdout,
-    /^call: dfs on_page content_parsing --body <json\|@file\|-> \[--full\] \[--sandbox\] \[--max-cost <usd>\]$/m,
+    /^call: dfs on_page content_parsing --body <json\|@file\|-> \[--full\] \[--sandbox\] \[--max-cost <usd>\] \[--dry-run\] \[--no-validate\]$/m,
   );
   const get = await dfs(['appendix', 'user_data', '--help']);
   assert.match(get.stdout, /^call: dfs appendix user_data \[--full\]/m);

@@ -15,3 +15,8 @@ const FREE = new Set([
 // Estimate in USD: 0 for a free path or the sandbox, undefined when unknown.
 export const estimate = (specPath: string, sandbox: boolean): number | undefined =>
   sandbox || specPath.split('/').some((w) => FREE.has(w)) ? 0 : undefined;
+
+// Cost guard: an unknown price sends only with an explicit --max-cost (the sandbox estimates 0).
+// shortcut: no estimate is above 0 yet, so no ceiling check; ticket 05 adds it with price rules.
+export const guard = (est: number | undefined, ceiling: number | undefined): 'send' | 'refuse' =>
+  est === undefined && ceiling === undefined ? 'refuse' : 'send';

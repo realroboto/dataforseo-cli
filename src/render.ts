@@ -43,6 +43,8 @@ call flags:
   --full                  print the exact API response, not the Compact output
   --sandbox               send to the free sandbox, same credentials
   --max-cost <usd>        send a call whose price dfs does not know yet
+  --dry-run               validate, print the call plan as JSON; nothing sent, no credentials
+  --no-validate           field name, type and filter faults warn instead of exit 3
   credentials: DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD from the environment
 
 modules:
@@ -80,7 +82,7 @@ export function nodeHelp(node: Level, params: Record<string, string>, spec: Spec
     if (ep.method === 'post') lines.push('', `request fields: dfs schema ${ep.words.join(' ')}`);
     lines.push(
       '',
-      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>]`,
+      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>] [--dry-run] [--no-validate]`,
     );
   }
   const children = [...node.children].toSorted(([a], [b]) => a.localeCompare(b));

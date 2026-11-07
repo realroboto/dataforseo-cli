@@ -5,16 +5,16 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { text } from 'node:stream/consumers';
 import pkg from '../package.json' with { type: 'json' };
-import { type Catalog, concretePath, type Endpoint } from './catalog.ts';
+import type { Catalog, Endpoint } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
-import { estimate } from './pricing.ts';
+import { plan } from './planner.ts';
+import { estimate, guard } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
 import { getRow, listRows, openStore, type Row, save, storeFile } from './store.ts';
 import { authHeader, send } from './transport.ts';
 
-const SANDBOX = 'https://sandbox.dataforseo.com';
 export const STORE_USAGE =
   'dfs store show <id> [--from <n>] [--full] | dfs store list | dfs store path';
 
@@ -26,14 +26,21 @@ const isAccount = (http: number, code: unknown) =>
 const isOk = (code: unknown) =>
   typeof code === 'number' && (Math.floor(code / 10_000) === 2 || OK_WARNING.has(code));
 
-export type CallFlags = { body?: string; full?: boolean; sandbox?: boolean; 'max-cost'?: string };
+export type CallFlags = {
+  body?: string;
+  full?: boolean;
+  sandbox?: boolean;
+  'max-cost'?: string;
+  'dry-run'?: boolean;
+  'no-validate'?: boolean;
+};
 
 // The tasks to send: a JSON object is one task, an array is the batch.
 async function readBody(
   ep: Endpoint,
   arg: string | undefined,
   io: Io,
-): Promise<string | undefined> {
+): Promise<unknown[] | undefined> {
   if (ep.method !== 'post') {
     if (arg !== undefined) throw new DfsError(3, `${command(ep.words)} is GET: it takes no --body`);
     return undefined;
@@ -56,7 +63,7 @@ async function readBody(
   }
   if (isRecord(tasks)) tasks = [tasks];
   if (!Array.isArray(tasks)) throw new DfsError(3, '--body must be a JSON object or array');
-  return JSON.stringify(tasks);
+  return tasks;
 }
 
 function parseJson(s: string): unknown {
@@ -123,25 +130,44 @@ export async function call(
   flags: CallFlags,
   io: Io,
 ): Promise<number> {
-  const body = await readBody(ep, flags.body, io);
+  const tasks = await readBody(ep, flags.body, io);
   const sandbox = flags.sandbox === true;
-  const est = estimate(ep.path, sandbox);
-  if (flags['max-cost'] !== undefined && !(Number(flags['max-cost']) >= 0)) {
-    throw new DfsError(3, `--max-cost ${flags['max-cost']}: want a number of USD, 0 or more`);
+  const max = flags['max-cost'];
+  if (max !== undefined && !(Number(max) >= 0)) {
+    throw new DfsError(3, `--max-cost ${max}: want a number of USD, 0 or more`);
   }
-  // shortcut: an explicit --max-cost lets an unknown price pass, as the guard rule says; the
-  // ceiling is checked against an estimate once ticket 04 adds price rules.
-  if (est === undefined && flags['max-cost'] === undefined) {
+  const ceiling = max === undefined ? undefined : Number(max);
+  const planned = plan(catalog, ep, params, tasks, { sandbox, validate: !flags['no-validate'] });
+  // Planner warnings print before the send, so a failed send still shows them.
+  const early = planned.warnings.map((w) => `dfs: warning: ${w}\n`).join('');
+  io.stderr.write(early);
+  const est = estimate(ep.path, sandbox);
+  const verdict = guard(est, ceiling);
+  if (flags['dry-run']) {
+    const out = {
+      method: planned.method,
+      url: planned.url,
+      body: planned.body ?? null,
+      tasks: planned.body?.length ?? 0,
+      estimate: { usd: est ?? null, basis: est === undefined ? 'unknown' : 'rule', price_at: null },
+      ceiling: ceiling ?? null,
+      guard: verdict,
+      reuse: null,
+      spec: catalog.sha,
+    };
+    io.stdout.write(`${JSON.stringify(out)}\n`);
+    return 0;
+  }
+  if (verdict === 'refuse') {
     throw new DfsError(
       4,
       `price unknown for ${ep.path} in this build — pass --max-cost <usd> to send, or --sandbox`,
     );
   }
   const auth = authHeader(io.env);
-  const path = concretePath(ep, params);
-  const method = ep.method.toUpperCase();
-  const base = sandbox ? SANDBOX : (catalog.spec.servers?.[0]?.url ?? 'https://api.dataforseo.com');
-  const res = await send(io.fetch, { method, url: `${base}${path}`, body, auth });
+  const { method, path } = planned;
+  const body = planned.body && JSON.stringify(planned.body);
+  const res = await send(io.fetch, { method, url: planned.url, body, auth });
 
   const parsed = parseJson(res.text);
   const kept =
@@ -175,12 +201,14 @@ export async function call(
     throw new DfsError(5, '5 response not saved — stdout is the only copy');
   }
   const { lines, exit } = outcome(res.status, parsed, id);
-  const tasks = envelope.tasks_count ?? 0;
-  const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${tasks} cost=$${row.cost ?? '?'} est=$${est ?? '?'} saved=${id}`;
+  const taskCount = envelope.tasks_count ?? 0;
+  const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est ?? '?'} saved=${id}`;
   const stderr = [status, ...warnings, ...lines].map((l) => `${l}\n`).join('');
   io.stderr.write(stderr);
   if (parsed !== undefined) {
-    io.stdout.write(flags.full ? `${full}\n` : compact(parsed, id, 1, BUDGET - stderr.length));
+    io.stdout.write(
+      flags.full ? `${full}\n` : compact(parsed, id, 1, BUDGET - early.length - stderr.length),
+    );
   }
   return exit;
 }

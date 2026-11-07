@@ -84,11 +84,12 @@ export function faults(v: unknown, n: Schema | undefined, schemas: Schemas, path
   }
   const got = jsonType(v);
   if (want && want !== got && !(want === 'number' && got === 'integer')) {
-    out.push({ kind: 'type', path, detail: `want ${want} got ${got}` });
+    out.push({ kind: 'type', path, detail: `want ${want}, got ${got}` });
     return out;
   }
   if (Array.isArray(v)) {
-    for (const x of v) out.push(...faults(x, s.items ?? {}, schemas, `${path}[]`));
+    for (const [i, x] of v.entries())
+      out.push(...faults(x, s.items ?? {}, schemas, `${path}[${i}]`));
   } else if (isRecord(v)) {
     const f = fields(s, schemas);
     if (f.size === 0) return out;
