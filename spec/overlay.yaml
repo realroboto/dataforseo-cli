@@ -1,4 +1,4 @@
-# Seed overlay. Generated 2026-11-07 against vendor spec 55a4ed0; see docs/spec/SPEC.md, Vendor overlay.
+# Seed overlay. Generated 2026-11-07 against vendor spec 55a4ed0; see docs/spec/modules/catalog.md, Vendor overlay.
 overlay: 1.0.0
 info:
   title: dfs corrections to the DataForSEO OpenAPI spec

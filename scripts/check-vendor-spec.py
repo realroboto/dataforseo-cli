@@ -1,7 +1,7 @@
-"""Check every claim docs/spec/SPEC.md makes about the vendor OpenAPI spec.
+"""Check every claim the docs/spec/ bundle makes about the vendor OpenAPI spec.
 
 Usage: python3 -I check.py <openapi_specification.yaml> [overlay.yaml]
-Read-only. Prints one block per claim class; docs/spec/SPEC.md cites the block name.
+Read-only. Prints one block per claim class; docs/spec/ cites the block name.
 """
 import collections, datetime, re, sys
 import yaml
@@ -14,7 +14,7 @@ Loader.add_implicit_resolver('tag:yaml.org,2002:bool', re.compile(r'^(?:true|Tru
 d = yaml.load(open(sys.argv[1], encoding='utf-8'), Loader=Loader)
 
 def apply_overlay(doc, path):
-    """OpenAPI Overlay 1.0 subset: RFC 9535 normalized-path targets, update and remove (docs/spec/SPEC.md Vendor overlay)."""
+    """OpenAPI Overlay 1.0 subset: RFC 9535 normalized-path targets, update and remove (docs/spec/modules/catalog.md, Vendor overlay)."""
     ov = yaml.load(open(path, encoding='utf-8'), Loader=Loader)
     misses = []
     for act in ov['actions']:
