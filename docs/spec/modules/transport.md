@@ -16,4 +16,6 @@ status: stable
      - Paid call: retry only when the response proves cost 0 and the code is 40202, 40209, 50000, 50301, 50303 or 50401. Same backoff.
      - Connection lost after a paid send: no retry; exit 1 with remedy `dfs +collect`.
      - 40103: no automatic retry; the task counts as failed, and the remedy names `--fresh`.
+     - **Agent design:** retry code = envelope code; under a 20000 envelope, retry only when every task has a listed code. Reason: a batch with a good task would pay that task twice (paid) or refetch it for nothing (free).
+     - **Agent design:** a paid call counts every failed `fetch` as a lost connection, refused or unresolved connections included. Reason: `fetch` gives no sure signal that nothing was sent; the worst case is assumed (scope-risks).
    - Pace: `X-RateLimit-Remaining` 0 → wait for the next minute; at most 10 requests in flight per process; Live client timeout 130 s (31:152).

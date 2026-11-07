@@ -20,7 +20,7 @@ export type Io = {
   stdout: { write(chunk: string): unknown };
   stderr: { write(chunk: string): unknown };
   stdin: NodeJS.ReadableStream;
-  sleep?: (ms: number) => Promise<void>; // retry backoff; tests skip the wait
+  sleep?: (ms: number) => Promise<void>; // retry backoff and rate-limit wait; tests skip the wait
   now?: () => number; // clock of the reuse, spec and price windows; tests set it
 };
 
