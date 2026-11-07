@@ -8,11 +8,21 @@ import pkg from '../package.json' with { type: 'json' };
 import type { Catalog, Endpoint } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
-import { plan } from './planner.ts';
-import { estimate, guard } from './pricing.ts';
+import { type Plan, plan } from './planner.ts';
+import { type Estimate, estimate, guard, isFree, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
-import { getRow, listRows, openStore, type Row, save, storeFile } from './store.ts';
+import {
+  getRow,
+  listRows,
+  openStore,
+  type Price,
+  type Row,
+  readPrice,
+  save,
+  storeFile,
+  writePrice,
+} from './store.ts';
 import { authHeader, send } from './transport.ts';
 
 export const STORE_USAGE =
@@ -30,7 +40,7 @@ export type CallFlags = {
   body?: string;
   full?: boolean;
   sandbox?: boolean;
-  'max-cost'?: string;
+  'max-cost'?: string; // explicit ceiling; also sends an unknown or unbounded price
   'dry-run'?: boolean;
   'no-validate'?: boolean;
 };
@@ -123,6 +133,114 @@ function outcome(http: number, body: unknown, id: string): { lines: string[]; ex
   return { lines, exit: failed.length > 0 ? 6 : 0 };
 }
 
+const USER_DATA = '/v3/appendix/user_data';
+const DAY = 24 * 60 * 60 * 1000;
+
+// USD from a flag or variable: a number, 0 or more; undefined when not set.
+function parseUsd(name: string, value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (value.trim() === '' || !(Number(value) >= 0)) {
+    throw new DfsError(3, `${name} ${value}: want a number of USD, 0 or more`);
+  }
+  return Number(value);
+}
+
+// The `price` node of a user_data response with envelope 20000.
+function priceNode(body: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(body) || body.status_code !== 20000 || !Array.isArray(body.tasks)) return undefined;
+  const [task] = body.tasks;
+  const [result] = isRecord(task) && Array.isArray(task.result) ? task.result : [];
+  return isRecord(result) && isRecord(result.price) ? result.price : undefined;
+}
+
+// One HTTP exchange, saved to the Store before anything prints. A good non-sandbox user_data
+// response also writes the price tree (pricing.md); sandbox prices are dummy data.
+async function exchange(
+  catalog: Catalog,
+  ep: Endpoint,
+  planned: Plan,
+  opts: { sandbox: boolean; estimate: number | null },
+  io: Io,
+  warn: (w: string) => void,
+) {
+  const auth = authHeader(io.env);
+  const { method, path } = planned;
+  const body = planned.body && JSON.stringify(planned.body);
+  const res = await send(io.fetch, { method, url: planned.url, body, auth });
+
+  const parsed = parseJson(res.text);
+  const kept =
+    parsed !== undefined && ep.path === USER_DATA ? redactLogin(res.text, parsed) : res.text;
+  const envelope = isRecord(parsed) ? parsed : {};
+  const row: Row = {
+    id: `r_${randomBytes(5).toString('hex')}`,
+    time: new Date((io.now ?? Date.now)()).toISOString(),
+    method,
+    spec_path: ep.path,
+    path,
+    sandbox: opts.sandbox ? 1 : 0,
+    request: body ?? null,
+    http_status: res.status,
+    status_code: typeof envelope.status_code === 'number' ? envelope.status_code : null,
+    cost: typeof envelope.cost === 'number' ? envelope.cost : null,
+    estimate: opts.estimate,
+    reused_from: null,
+    dfs_version: pkg.version,
+    spec_sha: catalog.sha,
+    body: parsed === undefined ? null : kept,
+  };
+  const saved = save(io.env, row, warn);
+  const tree = ep.path === USER_DATA && !opts.sandbox && res.status < 300 && priceNode(parsed);
+  const price = tree ? { at: row.time, tree } : undefined;
+  if (price) {
+    try {
+      const db = openStore(io.env);
+      try {
+        writePrice(db, price);
+      } finally {
+        db.close();
+      }
+    } catch (e) {
+      warn(`price tree not saved (${messageOf(e)})`);
+    }
+  }
+  return { res, parsed, row, saved, price };
+}
+
+// The stored price tree. Before a send it is refreshed first when older than 24 h or absent and
+// credentials exist; a failed refresh warns and keeps the old tree.
+async function priceTree(
+  catalog: Catalog,
+  io: Io,
+  refresh: boolean,
+  warn: (w: string) => void,
+): Promise<Price | undefined> {
+  const db = openStore(io.env);
+  let old: Price | undefined;
+  try {
+    old = readPrice(db);
+  } finally {
+    db.close();
+  }
+  const ep = catalog.endpoints.find((e) => e.path === USER_DATA);
+  const fresh = old !== undefined && (io.now ?? Date.now)() - Date.parse(old.at) <= DAY;
+  const login = io.env.DATAFORSEO_LOGIN && io.env.DATAFORSEO_PASSWORD;
+  if (!refresh || fresh || !login || !ep) return old;
+  let why: string;
+  try {
+    const planned = plan(catalog, ep, {}, undefined, { sandbox: false, validate: true });
+    const r = await exchange(catalog, ep, planned, { sandbox: false, estimate: 0 }, io, warn);
+    if (r.price) return r.price;
+    why = `${r.row.status_code ?? `HTTP ${r.res.status}`}, ${r.saved ? `see: dfs store show ${r.row.id}` : 'not saved'}`;
+  } catch (e) {
+    why = messageOf(e);
+  }
+  warn(
+    `price tree refresh failed (${why}); ${old ? `using the tree from ${old.at}` : 'no price tree'}`,
+  );
+  return old;
+}
+
 export async function call(
   catalog: Catalog,
   ep: Endpoint,
@@ -132,77 +250,70 @@ export async function call(
 ): Promise<number> {
   const tasks = await readBody(ep, flags.body, io);
   const sandbox = flags.sandbox === true;
-  const max = flags['max-cost'];
-  if (max !== undefined && !(Number(max) >= 0)) {
-    throw new DfsError(3, `--max-cost ${max}: want a number of USD, 0 or more`);
-  }
-  const ceiling = max === undefined ? undefined : Number(max);
+  const explicit = parseUsd('--max-cost', flags['max-cost']);
+  const ceiling = explicit ?? parseUsd('DFS_MAX_COST', io.env.DFS_MAX_COST || undefined) ?? 1;
   const planned = plan(catalog, ep, params, tasks, { sandbox, validate: !flags['no-validate'] });
-  // Planner warnings print before the send, so a failed send still shows them.
-  const early = planned.warnings.map((w) => `dfs: warning: ${w}\n`).join('');
-  io.stderr.write(early);
-  const est = estimate(ep.path, sandbox);
-  const verdict = guard(est, ceiling);
+  // Warnings before the send print at once, so a failed send still shows them.
+  let early = '';
+  const warnEarly = (w: string) => {
+    const line = `dfs: warning: ${w}\n`;
+    early += line;
+    io.stderr.write(line);
+  };
+  planned.warnings.forEach(warnEarly);
+  // The sandbox and the free list estimate 0; the guard does not apply.
+  const free = sandbox || isFree(ep.path);
+  const rule = free ? undefined : ruleFor(ep.path);
+  const price =
+    rule && !rule.unbounded
+      ? await priceTree(catalog, io, !flags['dry-run'], warnEarly)
+      : undefined;
+  const est: Estimate = free
+    ? { usd: 0, basis: 'rule' }
+    : estimate(rule, planned.body ?? [], price?.tree);
+  if (est.warning) warnEarly(est.warning);
+  const refusal = free ? undefined : guard(ep.path, est, ceiling, explicit !== undefined);
   if (flags['dry-run']) {
     const out = {
       method: planned.method,
       url: planned.url,
       body: planned.body ?? null,
       tasks: planned.body?.length ?? 0,
-      estimate: { usd: est ?? null, basis: est === undefined ? 'unknown' : 'rule', price_at: null },
-      ceiling: ceiling ?? null,
-      guard: verdict,
+      estimate: { usd: est.usd, basis: est.basis, price_at: price?.at ?? null },
+      ceiling,
+      guard: refusal ? 'refuse' : 'send',
       reuse: null,
       spec: catalog.sha,
     };
     io.stdout.write(`${JSON.stringify(out)}\n`);
     return 0;
   }
-  if (verdict === 'refuse') {
-    throw new DfsError(
-      4,
-      `price unknown for ${ep.path} in this build — pass --max-cost <usd> to send, or --sandbox`,
-    );
-  }
-  const auth = authHeader(io.env);
-  const { method, path } = planned;
-  const body = planned.body && JSON.stringify(planned.body);
-  const res = await send(io.fetch, { method, url: planned.url, body, auth });
-
-  const parsed = parseJson(res.text);
-  const kept =
-    parsed !== undefined && ep.path === '/v3/appendix/user_data'
-      ? redactLogin(res.text, parsed)
-      : res.text;
-  const envelope = isRecord(parsed) ? parsed : {};
-  const id = `r_${randomBytes(5).toString('hex')}`;
-  const row: Row = {
-    id,
-    time: new Date((io.now ?? Date.now)()).toISOString(),
-    method,
-    spec_path: ep.path,
-    path,
-    sandbox: sandbox ? 1 : 0,
-    request: body ?? null,
-    http_status: res.status,
-    status_code: typeof envelope.status_code === 'number' ? envelope.status_code : null,
-    cost: typeof envelope.cost === 'number' ? envelope.cost : null,
-    estimate: est ?? null,
-    reused_from: null,
-    dfs_version: pkg.version,
-    spec_sha: catalog.sha,
-    body: parsed === undefined ? null : kept,
-  };
+  if (refusal) throw new DfsError(4, refusal);
 
   const warnings: string[] = [];
+  const { res, parsed, row, saved } = await exchange(
+    catalog,
+    ep,
+    planned,
+    { sandbox, estimate: est.usd },
+    io,
+    (w) => warnings.push(`dfs: warning: ${w}`),
+  );
+  const { id } = row;
   const full = row.body ?? res.text;
-  if (!save(io.env, row, (w) => warnings.push(`dfs: warning: ${w}`))) {
+  if (!saved) {
     io.stdout.write(`${full}\n`);
     throw new DfsError(5, '5 response not saved — stdout is the only copy');
   }
+  // Sandbox costs are dummy data (r34:51).
+  if (!sandbox && est.usd !== null && row.cost !== null && row.cost > est.usd) {
+    warnings.push(
+      `dfs: warning: real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
+    );
+  }
   const { lines, exit } = outcome(res.status, parsed, id);
-  const taskCount = envelope.tasks_count ?? 0;
-  const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est ?? '?'} saved=${id}`;
+  const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;
+  const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est.usd ?? '?'} saved=${id}`;
   const stderr = [status, ...warnings, ...lines].map((l) => `${l}\n`).join('');
   io.stderr.write(stderr);
   if (parsed !== undefined) {

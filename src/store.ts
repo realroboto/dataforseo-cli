@@ -51,6 +51,13 @@ const SCHEMA = `CREATE TABLE response (
   body BLOB
 )`;
 
+// One row: the `price` node of the last good user_data and its fetch time (pricing.md).
+const PRICE = `CREATE TABLE price (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  fetched_at TEXT NOT NULL,
+  tree BLOB NOT NULL
+)`;
+
 export const configDir = (env: NodeJS.ProcessEnv): string =>
   env.DFS_CONFIG_DIR || join(homedir(), '.config', 'dfs');
 export const storeFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'store.db');
@@ -98,7 +105,8 @@ export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
   try {
     db.exec('PRAGMA journal_mode = WAL');
     const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    if (user_version === 0) db.exec(`BEGIN; ${SCHEMA}; PRAGMA user_version = 1; COMMIT`);
+    if (user_version < 1) db.exec(`BEGIN; ${SCHEMA}; PRAGMA user_version = 1; COMMIT`);
+    if (user_version < 2) db.exec(`BEGIN; ${PRICE}; PRAGMA user_version = 2; COMMIT`);
     importUnsaved(db, env);
     return db;
   } catch (e) {
@@ -166,3 +174,19 @@ export const listRows = (db: DatabaseSync): Omit<Row, 'body'>[] =>
     Row,
     'body'
   >[];
+
+export type Price = { at: string; tree: unknown }; // at: ISO 8601 fetch time
+
+export function readPrice(db: DatabaseSync): Price | undefined {
+  const row = db.prepare('SELECT fetched_at, json(tree) AS tree FROM price WHERE id = 1').get() as
+    | { fetched_at: string; tree: string }
+    | undefined;
+  return row && { at: row.fetched_at, tree: JSON.parse(row.tree) };
+}
+
+export const writePrice = (db: DatabaseSync, { at, tree }: Price): void => {
+  db.prepare('INSERT OR REPLACE INTO price (id, fetched_at, tree) VALUES (1, ?, jsonb(?))').run(
+    at,
+    JSON.stringify(tree),
+  );
+};

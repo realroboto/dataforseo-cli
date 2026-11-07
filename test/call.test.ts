@@ -175,6 +175,17 @@ const serp = (items: unknown[]) => ({
     },
   ],
 });
+// A config dir whose price tree was just loaded: serp live advanced $0.002, task_post $0.0006.
+const priced = async () => {
+  const e = env();
+  const leaf = (cost: number) => ({ priority_normal: [{ cost_type: 'per_request', cost }] });
+  const data = structuredClone(USER_DATA);
+  Object.assign(data.tasks[0].result[0], {
+    price: { serp: { live: { advanced: leaf(0.002) }, task_post: leaf(0.0006) } },
+  });
+  assert.equal((await callAndId(e, ['appendix', 'user_data'], data)).code, 0);
+  return e;
+};
 const SERP_ARGV = ['serp', 'google', 'organic', 'live', 'advanced', '--max-cost', '1'];
 const ITEMS = Array.from({ length: 100 }, (_, i) => ({
   type: 'organic',
@@ -185,12 +196,12 @@ const ITEMS = Array.from({ length: 100 }, (_, i) => ({
 }));
 
 test('Compact output stops after a whole item within 9,000 characters; --from continues', async () => {
-  const e = env();
+  const e = await priced();
   const first = await callAndId(e, [...SERP_ARGV, '--body', '{"keyword":"pizza"}'], serp(ITEMS));
   assert.equal(first.code, 0, first.stderr);
   assert.equal(
     first.stderr,
-    `dfs: 20000 /v3/serp/google/organic/live/advanced tasks=1 cost=$0.002 est=$? saved=${first.id}\n`,
+    `dfs: 20000 /v3/serp/google/organic/live/advanced tasks=1 cost=$0.002 est=$0.002 saved=${first.id}\n`,
   );
   assert.ok(first.stdout.length + first.stderr.length <= 9000);
   const lines = first.stdout.trimEnd().split('\n');
@@ -216,7 +227,7 @@ test('Compact output stops after a whole item within 9,000 characters; --from co
 });
 
 test('an item larger than the budget prints as an outline line', async () => {
-  const e = env();
+  const e = await priced();
   const big = { type: 'organic', rank_absolute: 1, description: 'y'.repeat(12_000) };
   const r = await callAndId(e, [...SERP_ARGV, '--body', '[{"keyword":"pizza"}]'], serp([big]));
   assert.equal(r.code, 0, r.stderr);
@@ -226,18 +237,18 @@ test('an item larger than the budget prints as an outline line', async () => {
   );
 });
 
-test('a paid path with no --max-cost exits 4, nothing sent; --sandbox sends at est $0', async () => {
+test('a path with no price rule and no --max-cost exits 4, nothing sent; --sandbox sends at est $0', async () => {
   const live = ['serp', 'google', 'organic', 'live', 'advanced', '--body', '{"keyword":"pizza"}'];
   const { fetch, calls } = fakeFetch(() => json(serp([])));
-  const refused = await dfs(live, { env: env(), fetch });
+  const anchors = ['backlinks', 'anchors', 'live', '--body', '{"target":"forbes.com"}'];
+  const refused = await dfs(anchors, { env: env(), fetch });
   assert.equal(refused.code, 4);
   assert.equal(refused.stdout, '');
   assert.equal(
     refused.stderr,
-    'dfs: price unknown for /v3/serp/google/organic/live/advanced in this build — pass --max-cost <usd> to send, or --sandbox\n',
+    'dfs: price of /v3/backlinks/anchors/live unknown — pass --max-cost <usd> to send, or --sandbox\n',
   );
   assert.equal(calls.length, 0);
-
   const sandbox = await dfs([...live, '--sandbox'], { env: env(), fetch });
   assert.equal(sandbox.code, 0, sandbox.stderr);
   assert.equal(calls[0].url, 'https://sandbox.dataforseo.com/v3/serp/google/organic/live/advanced');
@@ -254,7 +265,7 @@ test('--body takes an object, an array, @file or - for stdin; bad input exits 3'
   const argv = ['serp', 'google', 'organic', 'task_post', '--max-cost', '1'];
   const sent = async (body: string, stdin = Readable.from([])) => {
     const { fetch, calls } = fakeFetch(() => json(serp([])));
-    const r = await dfs([...argv, '--body', body], { env: env(), fetch, stdin });
+    const r = await dfs([...argv, '--body', body], { env: await priced(), fetch, stdin });
     assert.equal(r.code, 0, r.stderr);
     return calls[0].init?.body;
   };
@@ -363,7 +374,7 @@ test('Store: dir 700, file 600, WAL', async () => {
   assert.equal(statSync(join(e.DFS_CONFIG_DIR, 'store.db')).mode & 0o777, 0o600);
   const db = new DatabaseSync(join(e.DFS_CONFIG_DIR, 'store.db'), { readOnly: true });
   assert.deepEqual({ ...db.prepare('PRAGMA journal_mode').get() }, { journal_mode: 'wal' });
-  assert.deepEqual({ ...db.prepare('PRAGMA user_version').get() }, { user_version: 1 });
+  assert.deepEqual({ ...db.prepare('PRAGMA user_version').get() }, { user_version: 2 });
   db.close();
 });
 

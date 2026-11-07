@@ -35,7 +35,7 @@ test('--dry-run prints the plan JSON, sends nothing, needs no credentials', asyn
   assert.deepEqual(plan.body, [TASK]);
   assert.equal(plan.tasks, 1);
   assert.deepEqual(plan.estimate, { usd: null, basis: 'unknown', price_at: null });
-  assert.equal(plan.ceiling, null);
+  assert.equal(plan.ceiling, 1, '$1 default ceiling');
   assert.equal(plan.guard, 'refuse');
   assert.equal(plan.reuse, null);
   assert.match(plan.spec, /^[0-9a-f]{40}$/);
