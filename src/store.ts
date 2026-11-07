@@ -31,6 +31,7 @@ export type Row = {
   dfs_version: string;
   spec_sha: string;
   body: string | null; // JSON text; kept as JSONB. null: the response was not JSON
+  reuse_key: string | null; // sha256 of the canonical request
 };
 
 const SCHEMA = `CREATE TABLE response (
@@ -50,6 +51,10 @@ const SCHEMA = `CREATE TABLE response (
   spec_sha TEXT NOT NULL,
   body BLOB
 )`;
+
+// Added in user_version 3: the reuse lookup reads a key over a 12 h window.
+const REUSE = `ALTER TABLE response ADD COLUMN reuse_key TEXT;
+CREATE INDEX response_reuse ON response (reuse_key, time)`;
 
 // One row: the `price` node of the last good user_data and its fetch time (pricing.md).
 const PRICE = `CREATE TABLE price (
@@ -84,6 +89,7 @@ const ROW_COLUMNS: (keyof Row)[] = [
   'dfs_version',
   'spec_sha',
   'body',
+  'reuse_key',
 ];
 
 // A fixed column list: an unsaved/ file names no SQL. On import the row may be in the Store
@@ -107,6 +113,7 @@ export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
     const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
     if (user_version < 1) db.exec(`BEGIN; ${SCHEMA}; PRAGMA user_version = 1; COMMIT`);
     if (user_version < 2) db.exec(`BEGIN; ${PRICE}; PRAGMA user_version = 2; COMMIT`);
+    if (user_version < 3) db.exec(`BEGIN; ${REUSE}; PRAGMA user_version = 3; COMMIT`);
     importUnsaved(db, env);
     return db;
   } catch (e) {
@@ -161,12 +168,18 @@ export function save(env: NodeJS.ProcessEnv, row: Row, warn: (m: string) => void
 
 const COLUMNS = 'id, time, method, spec_path, path, sandbox, http_status, status_code, cost';
 
+const FULL = `${COLUMNS}, request, estimate, reused_from, dfs_version, spec_sha, json(body) AS body, reuse_key`;
+
 export const getRow = (db: DatabaseSync, id: string): Row | undefined =>
+  db.prepare(`SELECT ${FULL} FROM response WHERE id = ?`).get(id) as Row | undefined;
+
+// Sent responses with this key and a body, at or after `since` (ISO 8601), newest first.
+export const reuseRows = (db: DatabaseSync, key: string, since: string): Row[] =>
   db
     .prepare(
-      `SELECT ${COLUMNS}, request, estimate, reused_from, dfs_version, spec_sha, json(body) AS body FROM response WHERE id = ?`,
+      `SELECT ${FULL} FROM response WHERE reuse_key = ? AND time >= ? AND reused_from IS NULL AND body IS NOT NULL ORDER BY time DESC, rowid DESC`,
     )
-    .get(id) as Row | undefined;
+    .all(key, since) as Row[];
 
 // Newest first, no body.
 export const listRows = (db: DatabaseSync): Omit<Row, 'body'>[] =>

@@ -219,7 +219,8 @@ test('estimate above the ceiling exits 4 and sends nothing; --max-cost, DFS_MAX_
     (await dfs([...live, '--max-cost', '1'], { env: low, fetch, now: at(NOON) })).code,
     0,
   );
-  assert.equal((await dfs(live, { env: e, fetch, now: at(NOON) })).code, 0);
+  // --fresh: the first send would be reused.
+  assert.equal((await dfs([...live, '--fresh'], { env: e, fetch, now: at(NOON) })).code, 0);
   assert.equal(calls.length, 2);
   const plan = await dry(low, { keyword: 'pizza' });
   assert.equal(plan.ceiling, 0.001);
@@ -281,7 +282,7 @@ test('a tree older than 24 h is refreshed first; a failed refresh warns and uses
   // Older: user_data first, then the call at the new price.
   f = fakeFetch((url) => (url.endsWith('/user_data') ? json(userData(dearer)) : paid()));
   const later = at('2026-11-08T13:00:00Z');
-  const r = await dfs(live, { env: e, fetch: f.fetch, now: later });
+  const r = await dfs([...live, '--fresh'], { env: e, fetch: f.fetch, now: later });
   assert.equal(r.code, 0, r.stderr);
   assert.deepEqual(
     f.calls.map((c) => new URL(c.url).pathname),

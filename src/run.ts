@@ -103,6 +103,7 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
     'max-cost': { type: 'string' },
     'dry-run': { type: 'boolean' },
     'no-validate': { type: 'boolean' },
+    fresh: { type: 'boolean' },
   });
   if (positionals.length === 0) {
     io.stdout.write(rootHelp(catalog.root, catalog));

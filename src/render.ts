@@ -45,8 +45,10 @@ call flags:
   --max-cost <usd>        cost ceiling (default: DFS_MAX_COST, else 1); also sends an unknown price
   --dry-run               validate, print the call plan as JSON; nothing sent, no credentials
   --no-validate           field name, type and filter faults warn instead of exit 3
+  --fresh                 send even when a stored response is reusable
   credentials: DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD from the environment
   cost guard: exit 4, nothing sent, when the estimate passes the ceiling or the price is unknown
+  reuse: the same paid request within 12 h of a full success returns the stored response at $0
 
 modules:
 ${[...root.children.keys()]
@@ -83,7 +85,7 @@ export function nodeHelp(node: Level, params: Record<string, string>, spec: Spec
     if (ep.method === 'post') lines.push('', `request fields: dfs schema ${ep.words.join(' ')}`);
     lines.push(
       '',
-      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>] [--dry-run] [--no-validate]`,
+      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>] [--fresh] [--dry-run] [--no-validate]`,
     );
   }
   const children = [...node.children].toSorted(([a], [b]) => a.localeCompare(b));

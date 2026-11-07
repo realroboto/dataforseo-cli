@@ -1,6 +1,6 @@
 // One endpoint call: body, guard, send, save before print, Compact output, exit code; and the
 // `store` commands that reprint saved responses.
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { text } from 'node:stream/consumers';
@@ -19,6 +19,7 @@ import {
   type Price,
   type Row,
   readPrice,
+  reuseRows,
   save,
   storeFile,
   writePrice,
@@ -43,6 +44,7 @@ export type CallFlags = {
   'max-cost'?: string; // explicit ceiling; also sends an unknown or unbounded price
   'dry-run'?: boolean;
   'no-validate'?: boolean;
+  fresh?: boolean; // send even when a stored response is reusable
 };
 
 // The tasks to send: a JSON object is one task, an array is the batch.
@@ -135,6 +137,45 @@ function outcome(http: number, body: unknown, id: string): { lines: string[]; ex
 
 const USER_DATA = '/v3/appendix/user_data';
 const DAY = 24 * 60 * 60 * 1000;
+const REUSE_WINDOW = DAY / 2;
+
+// Reuse key (store.md): sha256 of the concrete path, the body with object keys sorted at every
+// depth and no whitespace, and the sandbox flag.
+function reuseKey(planned: Plan, sandbox: boolean): string {
+  const body = JSON.stringify(planned.body ?? null, (_, v) =>
+    isRecord(v)
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((k) => [k, v[k]]),
+        )
+      : v,
+  );
+  return createHash('sha256')
+    .update(`${planned.path}\n${body}\n${sandbox ? 1 : 0}`)
+    .digest('hex');
+}
+
+// The newest fully successful response of this request in the reuse window.
+function reusable(io: Io, planned: Plan, sandbox: boolean): Row | undefined {
+  const since = new Date((io.now ?? Date.now)() - REUSE_WINDOW).toISOString();
+  const db = openStore(io.env);
+  try {
+    return reuseRows(db, reuseKey(planned, sandbox), since).find(
+      (r) => outcome(r.http_status, JSON.parse(r.body as string), r.id).exit === 0,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// 42s, 5m, 3h04m
+function age(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  if (m === 0) return `${s}s`;
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+}
 
 // USD from a flag or variable: a number, 0 or more; undefined when not set.
 function parseUsd(name: string, value: string | undefined): number | undefined {
@@ -188,6 +229,7 @@ async function exchange(
     dfs_version: pkg.version,
     spec_sha: catalog.sha,
     body: parsed === undefined ? null : kept,
+    reuse_key: reuseKey(planned, opts.sandbox),
   };
   const saved = save(io.env, row, warn);
   const tree = ep.path === USER_DATA && !opts.sandbox && res.status < 300 && priceNode(parsed);
@@ -261,6 +303,9 @@ export async function call(
     io.stderr.write(line);
   };
   planned.warnings.forEach(warnEarly);
+  // Free paths always go to the API (user story 24).
+  const reuse = flags.fresh || isFree(ep.path) ? undefined : reusable(io, planned, sandbox);
+  if (reuse && !flags['dry-run']) return replay(catalog, ep, reuse, flags, io, early);
   // The sandbox and the free list estimate 0; the guard does not apply.
   const free = sandbox || isFree(ep.path);
   const rule = free ? undefined : ruleFor(ep.path);
@@ -282,7 +327,7 @@ export async function call(
       estimate: { usd: est.usd, basis: est.basis, price_at: price?.at ?? null },
       ceiling,
       guard: refusal ? 'refuse' : 'send',
-      reuse: null,
+      reuse: reuse?.id ?? null,
       spec: catalog.sha,
     };
     io.stdout.write(`${JSON.stringify(out)}\n`);
@@ -322,6 +367,41 @@ export async function call(
     );
   }
   return exit;
+}
+
+// A stored response at $0: saves a reuse row (no body, no cost), then prints the stored output.
+function replay(
+  catalog: Catalog,
+  ep: Endpoint,
+  src: Row,
+  flags: CallFlags,
+  io: Io,
+  early: string, // warnings already printed; they count against the budget
+): number {
+  const warnings: string[] = [];
+  const now = (io.now ?? Date.now)();
+  const row: Row = {
+    ...src,
+    id: `r_${randomBytes(5).toString('hex')}`,
+    time: new Date(now).toISOString(),
+    cost: 0,
+    estimate: 0,
+    reused_from: src.id,
+    dfs_version: pkg.version,
+    spec_sha: catalog.sha,
+    body: null,
+  };
+  // The stored response stays the only copy of the data; a lost reuse row loses no data.
+  save(io.env, row, (w) => warnings.push(`dfs: warning: ${w}`));
+  const full = src.body as string;
+  const parsed = JSON.parse(full);
+  const status = `dfs: ${src.status_code} ${ep.path} tasks=${parsed.tasks_count ?? 0} cost=$0 est=$0 reused=${src.id} age=${age(now - Date.parse(src.time))}`;
+  const stderr = [status, ...warnings].map((l) => `${l}\n`).join('');
+  io.stderr.write(stderr);
+  io.stdout.write(
+    flags.full ? `${full}\n` : compact(parsed, src.id, 1, BUDGET - early.length - stderr.length),
+  );
+  return 0;
 }
 
 export function store(
