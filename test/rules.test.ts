@@ -5,11 +5,8 @@ import { FREE, isFree, RULES, ruleFor } from '../src/pricing.ts';
 
 const PATHS = Object.keys(readSnapshot().spec.paths);
 // The table itself is the subject here (issue: a local test with spec:check logic), not run().
-// shortcut: only the modules of tickets 05–06 are checked; widen DONE as ticket 07 adds rules.
-const DONE = /^\/v3\/(serp|keywords_data|dataforseo_labs|backlinks|domain_analytics)\//;
-
-test('every path of a priced module has a price rule or sits on the free list (spec:check 2)', () => {
-  const bare = PATHS.filter((p) => DONE.test(p) && !isFree(p) && !ruleFor(p));
+test('every spec path has a price rule or sits on the free list (spec:check 2)', () => {
+  const bare = PATHS.filter((p) => !isFree(p) && !ruleFor(p));
   assert.deepEqual(bare, []);
 });
 

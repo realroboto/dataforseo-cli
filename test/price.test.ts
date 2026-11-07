@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { estimate, guard } from '../src/pricing.ts';
 import { fakeFetch } from './helpers/fetch.ts';
 import { dfs } from './helpers/io.ts';
 
@@ -25,7 +24,48 @@ const item = (task: number, result: number) =>
     { cost_type: 'per_result', cost: result },
     { cost_type: 'per_request', cost: task },
   ]);
+const perResult = (cost: number) => allPriorities([{ cost_type: 'per_result', cost }]);
+const queuePrices = (normal: number, high: number) => ({
+  priority_low: leaf(normal),
+  priority_normal: leaf(normal),
+  priority_high: leaf(high),
+});
 const PRICE = {
+  on_page: {
+    task_post: perResult(0.00015),
+    instant_pages: perResult(0.00015),
+    lighthouse: { live: allPriorities(leaf(0.005)) },
+  },
+  content_analysis: {
+    search: { live: item(0.024, 0.000036) },
+    phrase_trends: { live: item(0.024, 0.000036) },
+    category_trends: { live: item(0.024, 0.000036) },
+  },
+  merchant: {
+    amazon: { products: { task_post: queuePrices(0.0015, 0.003) } },
+    google: { sellers: { task_post: queuePrices(0.001, 0.002) } },
+  },
+  app_data: {
+    app_reviews: { task_post: queuePrices(0.00075, 0.0015) },
+    app_listings: { search: { live: item(0.1, 0.001) } },
+  },
+  business_data: {
+    google: {
+      my_business_updates: { task_post: queuePrices(0.00225, 0.0045) },
+      extended_reviews: { task_post: queuePrices(0.00075, 0.0015) },
+    },
+    tripadvisor: { reviews: { task_post: queuePrices(0.00075, 0.0015) } },
+  },
+  ai_optimization: {
+    llm_responses: { live: allPriorities(leaf(0.0006)) },
+    llm_scraper: { live: { advanced: allPriorities(leaf(0.004)) } },
+    llm_mentions: {
+      search_mentions: { live: item(0.1, 0.001) },
+      multi_target_metrics: { live: item(0.1, 0.001) },
+      historical: { live: item(0.1, 0.001) },
+    },
+    ai_keyword_data: { keywords_search_volume: { live: item(0.01, 0.0001) } },
+  },
   dataforseo_labs: {
     ranked_keywords: { live: item(0.012, 0.00012) },
     keyword_ideas: { live: item(0.012, 0.00012) },
@@ -189,21 +229,26 @@ test('estimate above the ceiling exits 4 and sends nothing; --max-cost, DFS_MAX_
   assert.match(bad.stderr, /^dfs: DFS_MAX_COST lots: want a number of USD/);
 });
 
+// Every path has a rule now, so an unknown price comes from a missing tree: no tree, failed refresh.
 test('unknown price exits 4 unless --max-cost is explicit; DFS_MAX_COST does not unlock it', async () => {
   const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.02, tasks: [] }));
   const search = ['content_analysis', 'search', 'live', '--body', '{"keyword":"seo"}'];
   const e = env({ DFS_MAX_COST: '5' });
   const r = await dfs(search, { env: e, fetch });
   assert.equal(r.code, 4);
-  assert.equal(
+  assert.match(
     r.stderr,
-    'dfs: price of /v3/content_analysis/search/live unknown — pass --max-cost <usd> to send, or --sandbox\n',
+    /^dfs: warning: price tree refresh failed \(20000, see: dfs store show r_\w+\); no price tree\ndfs: price of \/v3\/content_analysis\/search\/live unknown — pass --max-cost <usd> to send, or --sandbox\n$/,
   );
-  assert.equal(calls.length, 0);
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    ['https://api.dataforseo.com/v3/appendix/user_data'],
+    'only the refresh, never the call',
+  );
   const sent = await dfs([...search, '--max-cost', '0.01'], { env: e, fetch });
   assert.equal(sent.code, 0, sent.stderr);
   assert.match(sent.stderr, / est=\$\? saved=r_/);
-  assert.doesNotMatch(sent.stderr, /warning/, 'no estimate: no real-cost comparison');
+  assert.doesNotMatch(sent.stderr, /real cost/, 'no estimate: no real-cost comparison');
 });
 
 test('a rule node missing from the price tree: unknown price and a warning naming the rule', async () => {
@@ -340,6 +385,8 @@ test('free list paths never hit the guard, even with a $0 ceiling', async () => 
     ['backlinks', 'available_filters'],
     ['dataforseo_labs', 'google', 'available_history'],
     ['domain_analytics', 'technologies', 'technologies'],
+    ['on_page', 'pages', '--body', '{"id":"11071200-0000-0000-0000-000000000001"}'],
+    ['ai_optimization', 'claude', 'llm_responses', 'models'],
   ];
   for (const w of words) {
     const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0, tasks: [] }));
@@ -356,16 +403,21 @@ test('free list paths never hit the guard, even with a $0 ceiling', async () => 
   assert.equal(calls.length, 1, 'a free path sends no user_data refresh first');
 });
 
-// shortcut: no shipped rule is unbounded, so this checks guard() directly; move it to run() when
-// ticket 07 adds the first unbounded rule (tickets 05–06 modules have none).
-test('an unbounded rule is refused like an unknown price unless --max-cost is explicit', () => {
-  const est = estimate({ path: '/v3/x/live', node: ['x'], unbounded: true }, [{}], PRICE, 0);
-  assert.deepEqual(est, { usd: null, basis: 'unbounded' });
+test('an unbounded rule is refused like an unknown price unless --max-cost is explicit', async () => {
+  const e = env();
+  await loadPrices(e);
+  const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.01, tasks: [] }));
+  const chat = ['ai_optimization', 'chat_gpt', 'llm_responses', 'live', '--body'];
+  const body = JSON.stringify({ user_prompt: 'pizza?', model_name: 'gpt-4o' });
+  const r = await dfs([...chat, body], { env: e, fetch, now: at(NOON) });
+  assert.equal(r.code, 4);
   assert.equal(
-    guard('/v3/x/live', est, 1, false),
-    'price of /v3/x/live has no upper bound — pass --max-cost <usd> to send, or --sandbox',
+    r.stderr,
+    'dfs: price of /v3/ai_optimization/chat_gpt/llm_responses/live has no upper bound — pass --max-cost <usd> to send, or --sandbox\n',
   );
-  assert.equal(guard('/v3/x/live', est, 1, true), undefined);
+  assert.equal(calls.length, 0);
+  const sent = await dfs([...chat, body, '--max-cost', '0.05'], { env: e, fetch, now: at(NOON) });
+  assert.equal(sent.code, 0, sent.stderr);
 });
 
 // Estimate of one task on the stored tree, read through --dry-run.
@@ -514,4 +566,103 @@ test('per_request and paid flags: domain_technologies is flat; include_clickstre
   // Labs docs: "with this parameter enabled, you will be charged double the price for the request".
   const site = { ...US, target: 'example.com', include_clickstream_data: true };
   assert.equal(await usd(e, 'dataforseo_labs google ranked_keywords live', site), 0.048);
+});
+
+// pricing/on-page/onpage-api and help-center/cost-of-onpage-api-parameters: per crawled page,
+// each paid flag adds coefficient × base; browser rendering (33) includes load_resources and
+// enable_javascript.
+test('per_result and paid flags: On-Page bills max_crawl_pages, flags add base-price multiples', async () => {
+  const e = env();
+  await loadPrices(e);
+  const site = { target: 'example.com', max_crawl_pages: 100 };
+  assert.equal(await usd(e, 'on_page task_post', site), 0.015);
+  assert.equal(await usd(e, 'on_page task_post', { ...site, load_resources: true }), 0.045);
+  const all = {
+    ...site,
+    load_resources: true,
+    enable_javascript: true,
+    enable_browser_rendering: true,
+    enable_content_parsing: true,
+    calculate_keyword_density: true,
+  };
+  assert.equal(await usd(e, 'on_page task_post', all), 0.54, 'help-center: $0.0054 per page');
+  const page = { url: 'https://example.com', enable_browser_rendering: true };
+  assert.equal(await usd(e, 'on_page instant_pages', page), 0.0051);
+  assert.equal(await usd(e, 'on_page lighthouse live json', { url: page.url }), 0.005);
+});
+
+test('per_result: Content Analysis rows by limit or by date_group bucket', async () => {
+  const e = env();
+  await loadPrices(e);
+  const ca = 'content_analysis search live';
+  assert.equal(await usd(e, ca, { keyword: 'seo' }), 0.0276);
+  assert.equal(await usd(e, ca, { keyword: 'seo', limit: 1000 }), 0.06);
+  // NOON = 2026-11-07: 2026-09 … 2026-11 = 3 monthly rows (date_group default month).
+  const pizza = { keyword: 'pizza', date_from: '2026-09-01' };
+  assert.equal(await usd(e, 'content_analysis phrase_trends live', pizza), 0.024108);
+  const days = { category_code: 10994, date_from: '2026-11-01', date_group: 'day' };
+  assert.equal(await usd(e, 'content_analysis category_trends live', days), 0.024252);
+});
+
+test('depth multipliers and priority: Merchant, App Data and Business Data bill per block', async () => {
+  const e = env();
+  await loadPrices(e);
+  // Amazon products: blocks of 100, 250 → 3 × 0.0015; priority 2 reads the high price.
+  const shoes = { ...US, keyword: 'shoes', depth: 250 };
+  assert.equal(await usd(e, 'merchant amazon products task_post', shoes), 0.0045);
+  assert.equal(
+    await usd(e, 'merchant amazon products task_post', { ...shoes, priority: 2 }),
+    0.009,
+  );
+  // Google Shopping sellers: get_shops_on_google doubles the task price.
+  const seller = { ...US, product_id: '1113158713975221117', get_shops_on_google: true };
+  assert.equal(await usd(e, 'merchant google sellers task_post', seller), 0.002);
+  // Same node, engine-specific blocks: Google Play 150 reviews, App Store 25.
+  const app = { app_id: 'org.telegram.messenger', ...US, depth: 300 };
+  assert.equal(await usd(e, 'app_data google app_reviews task_post', app), 0.0015);
+  assert.equal(await usd(e, 'app_data apple app_reviews task_post', app), 0.009);
+  // 0.1 + 100 (default limit) × 0.001
+  const listing = { categories: ['Games'] };
+  assert.equal(await usd(e, 'app_data google app_listings search live', listing), 0.2);
+  // My Business Updates: task fee + 0.00075 per 10 updates; leaf 0.00225 holds the first block.
+  const gmb = { ...US, keyword: 'pizza hut', depth: 30 };
+  assert.equal(await usd(e, 'business_data google my_business_updates task_post', gmb), 0.00375);
+  // Extended reviews: blocks of 20; docs: a keyword identifier multiplies the price by 3.
+  const ext = { ...US, keyword: 'pizza hut', depth: 40 };
+  assert.equal(await usd(e, 'business_data google extended_reviews task_post', ext), 0.0045);
+  // pricing page: "(2 × $0.00075) + $0.00075 = $0.00225" for a language and depth 20.
+  const trip = { url_path: 'Hotel_Review-g60763-d93450', language_code: 'en', depth: 20 };
+  assert.equal(await usd(e, 'business_data tripadvisor reviews task_post', trip), 0.00225);
+  assert.equal(
+    await usd(e, 'business_data tripadvisor reviews task_post', {
+      ...trip,
+      language_name: 'English',
+    }),
+    0.00225,
+    'one language surcharge, not two',
+  );
+  const cid = { ...US, cid: '194604053573767737', depth: 20 };
+  assert.equal(await usd(e, 'business_data google extended_reviews task_post', cid), 0.0015);
+});
+
+test('per_request and per_result: AI Optimization scraper, mentions and keyword volume', async () => {
+  const e = env();
+  await loadPrices(e);
+  const ask = { ...US, keyword: 'best pizza' };
+  assert.equal(await usd(e, 'ai_optimization chat_gpt llm_scraper live advanced', ask), 0.004);
+  const target = { target: [{ keyword: 'pizza' }] };
+  // 0.1 + 100 (default limit) × 0.001
+  assert.equal(await usd(e, 'ai_optimization llm_mentions search_mentions live', target), 0.2);
+  // One item per target set.
+  const sets = {
+    targets: [1, 2, 3].map((i) => ({ key: `t${i}`, target: [{ domain: `${i}.com` }] })),
+  };
+  assert.equal(await usd(e, 'ai_optimization llm_mentions multi_target_metrics live', sets), 0.103);
+  // No date_from: from 2025-08 (the earliest) to 2026-11 = 16 months.
+  assert.equal(await usd(e, 'ai_optimization llm_mentions historical live', target), 0.116);
+  const kws = { ...US, keywords: ['a', 'b', 'c'] };
+  assert.equal(
+    await usd(e, 'ai_optimization ai_keyword_data keywords_search_volume live', kws),
+    0.0103,
+  );
 });

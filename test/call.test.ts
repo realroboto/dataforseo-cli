@@ -237,18 +237,10 @@ test('an item larger than the budget prints as an outline line', async () => {
   );
 });
 
-test('a path with no price rule and no --max-cost exits 4, nothing sent; --sandbox sends at est $0', async () => {
+// The unknown-price refusal: price.test.ts (every path has a rule; only a missing tree is unknown).
+test('--sandbox sends at est $0 with no price tree; a bad --max-cost exits 3', async () => {
   const live = ['serp', 'google', 'organic', 'live', 'advanced', '--body', '{"keyword":"pizza"}'];
   const { fetch, calls } = fakeFetch(() => json(serp([])));
-  const search = ['content_analysis', 'search', 'live', '--body', '{"keyword":"seo"}'];
-  const refused = await dfs(search, { env: env(), fetch });
-  assert.equal(refused.code, 4);
-  assert.equal(refused.stdout, '');
-  assert.equal(
-    refused.stderr,
-    'dfs: price of /v3/content_analysis/search/live unknown — pass --max-cost <usd> to send, or --sandbox\n',
-  );
-  assert.equal(calls.length, 0);
   const sandbox = await dfs([...live, '--sandbox'], { env: env(), fetch });
   assert.equal(sandbox.code, 0, sandbox.stderr);
   assert.equal(calls[0].url, 'https://sandbox.dataforseo.com/v3/serp/google/organic/live/advanced');

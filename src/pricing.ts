@@ -1,6 +1,5 @@
 // Pricing (docs/spec/modules/pricing.md): Estimate from the body, the price tree and the price
-// rules; Cost guard. shortcut: rules for serp, keywords_data, dataforseo_labs, backlinks and
-// domain_analytics only; ticket 07 adds the rest.
+// rules; Cost guard.
 import { isRecord } from './json.ts';
 
 export const FREE = new Set([
@@ -24,6 +23,32 @@ export const FREE = new Set([
   'index', // backlinks/index
   // A whole path: other technologies paths are paid.
   '/v3/domain_analytics/technologies/technologies',
+  // On-Page results and references: "will not be charged" or "charged only for posting a task"
+  // (their docs pages; the price tree prices them at 0).
+  ...[
+    'force_stop',
+    'summary/{id}',
+    'pages',
+    'pages_by_resource',
+    'resources',
+    'duplicate_tags',
+    'duplicate_content',
+    'links',
+    'redirect_chains',
+    'non_indexable',
+    'waterfall',
+    'keyword_density',
+    'microdata',
+    'uncrawlable_resources',
+    'raw_html',
+    'content_parsing',
+    'lighthouse/audits',
+    'lighthouse/versions',
+  ].map((api) => `/v3/on_page/${api}`),
+  // llm_responses/models: "Your account will not be charged for using this API".
+  ...['chat_gpt', 'claude', 'gemini', 'perplexity'].map(
+    (model) => `/v3/ai_optimization/${model}/llm_responses/models`,
+  ),
 ]);
 export const isFree = (specPath: string): boolean =>
   FREE.has(specPath) || specPath.split('/').some((w) => FREE.has(w));
@@ -32,7 +57,15 @@ export const isFree = (specPath: string): boolean =>
 type Pages = { field: string; size: number; next: number };
 // A paid body field. `when` tests String(value), default: set and not false. A number value
 // counts n units. `times` multiplies the task price, `add` adds n × the base price, `usd` n × usd.
-type Extra = { field: string; when?: RegExp; times?: number; add?: number; usd?: number };
+// `unless`: skipped when that field is set (a flag whose price another flag already includes).
+type Extra = {
+  field: string;
+  when?: RegExp;
+  times?: number;
+  add?: number;
+  usd?: number;
+  unless?: string;
+};
 // Count of a per_result leaf: an array length or a number in `field`, at most `max`; absent →
 // `default`, else `max`. A `span` counts the `unit` periods (or the period in body field `by`)
 // from date_from (absent: `from`, the earliest date) to date_to (absent: today). No results → 1.
@@ -340,12 +373,249 @@ const DOMAIN_RULES: Rule[] = [
   },
 ];
 
+// --- on_page. https://dataforseo.com/pricing/on-page/onpage-api: "Per crawled page", and
+// "the max_crawl_pages field is effectively the spending cap". help-center/
+// cost-of-onpage-api-parameters: each flag adds coefficient × base per page; browser rendering
+// (33) "includes load_resources + enable_javascript".
+const BROWSER = 'enable_browser_rendering';
+const ONPAGE: Extra[] = [
+  { field: 'load_resources', add: 2, unless: BROWSER },
+  { field: 'enable_javascript', add: 9, unless: BROWSER },
+  { field: BROWSER, add: 33 },
+  { field: 'enable_content_parsing', add: 1 },
+  { field: 'calculate_keyword_density', add: 1 },
+];
+const ON_PAGE_RULES: Rule[] = [
+  // max_crawl_pages: required, no documented maximum; absent → the API refuses the task.
+  {
+    path: '/v3/on_page/task_post',
+    node: ['on_page', 'task_post'],
+    results: { field: 'max_crawl_pages', max: Number.POSITIVE_INFINITY, default: 1 },
+    extras: ONPAGE,
+  },
+  // Live, one page per task: "Instant Pages and Content Parsing Live cost $0.00015 per page".
+  // shortcut: content_parsing/live takes the crawl coefficients (no source of its own); fix if a
+  // real cost differs.
+  { path: '/v3/on_page/instant_pages', node: ['on_page', 'instant_pages'], extras: ONPAGE },
+  {
+    path: '/v3/on_page/content_parsing/live',
+    node: ['on_page', 'content_parsing_live'],
+    extras: ONPAGE,
+  },
+  { path: '/v3/on_page/page_screenshot', node: ['on_page', 'page_screenshot'] },
+  // https://dataforseo.com/pricing/on-page/lighthouse-api: per task, categories and audits free.
+  { path: '/v3/on_page/lighthouse/task_post', node: ['on_page', 'lighthouse', 'task_post'] },
+  { path: '/v3/on_page/lighthouse/live/json', node: ['on_page', 'lighthouse', 'live'] },
+];
+
+// --- content_analysis. https://dataforseo.com/pricing/content-analysis-api/content-analysis:
+// "billed for setting a task and for each row in the response"; search: one row per citation.
+const content = (api: string, results: Results): Rule => ({
+  path: `/v3/content_analysis/${api}/live`,
+  node: ['content_analysis', api, 'live'],
+  results,
+});
+// Trends: one row per date_group bucket (default month); category_trends date_from ≥ 2022-10-31.
+const TRENDS: Results = { span: { from: '2022-10-31', unit: 'month', by: 'date_group' } };
+const CONTENT_RULES: Rule[] = [
+  content('search', LIMIT),
+  content('summary', { max: 1 }),
+  content('sentiment_analysis', { max: 1 }),
+  // shortcut: the account tree bills it per request only, though the pricing page says per row
+  // (10 rating rows, +$0.00036); add a row price if the real-cost warning fires.
+  {
+    path: '/v3/content_analysis/rating_distribution/live',
+    node: ['content_analysis', 'rating_distribution', 'live'],
+  },
+  content('phrase_trends', TRENDS),
+  content('category_trends', TRENDS),
+];
+
+// task_post, live/advanced, live/html: a path tail and its node tail.
+const QUEUE_AND_LIVE = [['task_post'], ['live', 'advanced'], ['live', 'html']];
+
+// --- merchant. https://dataforseo.com/pricing/merchant/google-shopping-api and
+// .../merchant/amazon-api: per SERP block of `depth`, each block full price.
+const MERCHANT_RULES: Rule[] = [
+  // Google products: "per page of 40 results"; sellers: 10 sellers, get_shops_on_google ×2.
+  {
+    path: '/v3/merchant/google/products/task_post',
+    node: ['merchant', 'google', 'products', 'task_post'],
+    pages: full(40),
+  },
+  {
+    path: '/v3/merchant/google/sellers/task_post',
+    node: ['merchant', 'google', 'sellers', 'task_post'],
+    pages: full(10),
+    extras: [{ field: 'get_shops_on_google', times: 2 }],
+  },
+  {
+    path: '/v3/merchant/google/product_info/task_post',
+    node: ['merchant', 'google', 'product_info', 'task_post'],
+  },
+  {
+    path: '/v3/merchant/google/sellers/ad_url/{shop_ad_aclk}',
+    node: ['merchant', 'google', 'sellers', 'ad_url'],
+  },
+  // Amazon products: 100 results per block; ASIN and sellers per task (no depth).
+  ...['products', 'asin', 'sellers'].flatMap((api) =>
+    QUEUE_AND_LIVE.map((mode) => ({
+      path: `/v3/merchant/amazon/${api}/${mode.join('/')}`,
+      node: ['merchant', 'amazon', api, ...mode],
+      ...(api === 'products' ? { pages: full(100) } : {}),
+    })),
+  ),
+];
+
+// --- app_data. https://dataforseo.com/pricing/app-data/google-play and .../app-data/app-store:
+// same prices, shared nodes without an engine word; block sizes differ per engine.
+const app = (engine: string, api: string, pages?: Pages): Rule => ({
+  path: `/v3/app_data/${engine}/${api}/task_post`,
+  node: ['app_data', api, 'task_post'],
+  pages,
+});
+const APP_RULES: Rule[] = [
+  app('google', 'app_searches', full(30)),
+  app('apple', 'app_searches', full(100)),
+  app('google', 'app_list', full(100)),
+  app('apple', 'app_list', full(100)),
+  app('google', 'app_info'),
+  app('apple', 'app_info'),
+  app('google', 'app_reviews', full(150)),
+  app('apple', 'app_reviews', full(25)),
+  // "$0.1 per request plus $0.001 per returned app".
+  ...['google', 'apple'].map((engine) => ({
+    path: `/v3/app_data/${engine}/app_listings/search/live`,
+    node: ['app_data', 'app_listings', 'search', 'live'],
+    results: LIMIT,
+  })),
+];
+
+// --- business_data. Per block of `depth` results, each block full price, unless noted.
+const business = (api: string, modes: string[][], bill: Omit<Rule, 'path' | 'node'> = {}) =>
+  modes.map((mode) => ({
+    path: `/v3/business_data/${api}/${mode.join('/')}`,
+    node: ['business_data', ...api.split('/'), ...mode],
+    ...bill,
+  }));
+const POST = [['task_post']];
+const LIVE = [['live']];
+const BOTH = [...POST, ...LIVE];
+const BUSINESS_RULES: Rule[] = [
+  // https://dataforseo.com/pricing/business-data/business-listings-api: "$0.012, plus $0.00036
+  // for each returned item", at most 1,000.
+  ...business('business_listings/search', LIVE, { results: LIMIT }),
+  ...business('business_listings/categories_aggregation', LIVE, { results: LIMIT }),
+  // https://dataforseo.com/pricing/business-data/business-data-api (also my_business_updates)
+  ...business('google/my_business_info', BOTH),
+  // Task fee $0.0015 + $0.00075 per 10 updates; the leaf ($0.00225) holds the first block.
+  ...business('google/my_business_updates', POST, {
+    pages: { field: 'depth', size: 10, next: 1 / 3 },
+  }),
+  // https://dataforseo.com/pricing/business-data/google-reviews-api (also extended_reviews)
+  // "Per block of 10 returned reviews"; a search operator in keyword: "multiplied by 5".
+  ...business('google/reviews', POST, { pages: full(10), extras: [OPERATORS] }),
+  // Per 20 reviews. Docs: keyword ×3, cid or place_id ×2. The pricing page's fixed surcharge
+  // (+$0.0015 keyword, +$0.00075 cid/place_id) equals it at depth 20, is lower above: take docs.
+  ...business('google/extended_reviews', POST, {
+    pages: full(20),
+    extras: [
+      OPERATORS,
+      { field: 'keyword', times: 3 },
+      { field: 'cid', times: 2, unless: 'keyword' },
+      { field: 'place_id', times: 2, unless: 'keyword' },
+    ],
+  }),
+  // https://dataforseo.com/pricing/business-data/google-questions-and-answers-api-pricing
+  ...business('google/questions_and_answers', BOTH, { pages: full(20) }),
+  // https://dataforseo.com/pricing/business-data/google-hotels-api (also hotel_info):
+  // "billed per SERP containing up to 18 organic hotel entities".
+  ...business('google/hotel_searches', BOTH, { pages: full(18) }),
+  // One hotel per task; load_prices_by_dates: "multiplied by two".
+  ...business('google/hotel_info', QUEUE_AND_LIVE, {
+    extras: [{ field: 'load_prices_by_dates', times: 2 }],
+  }),
+  // https://dataforseo.com/pricing/business-data/business-data-api-trustpilot-search-pricing
+  ...business('trustpilot/search', POST, { pages: full(10) }),
+  // https://dataforseo.com/pricing/business-data/business-data-api-trustpilot-reviews-pricing
+  ...business('trustpilot/reviews', POST, { pages: full(20) }),
+  // https://dataforseo.com/pricing/business-data/business-data-api-tripadvisor-search-pricing
+  ...business('tripadvisor/search', POST, { pages: full(30) }),
+  // https://dataforseo.com/pricing/business-data/business-data-api-tripadvisor-pricing
+  // A language field: "one extra request"; "(2 × $0.00075) + $0.00075 = $0.00225" at depth 20.
+  ...business('tripadvisor/reviews', POST, {
+    pages: full(10),
+    extras: [
+      { field: 'language_code', add: 1 },
+      { field: 'language_name', add: 1, unless: 'language_code' },
+    ],
+  }),
+];
+
+// --- ai_optimization. https://dataforseo.com/pricing/ai-optimization/llm-responses: "$0.0006 +
+// price charged by LLM", "the amount charged by the LLM is not known in advance": unbounded.
+const llm = (model: string, mode: string): Rule => ({
+  path: `/v3/ai_optimization/${model}/llm_responses/${mode}`,
+  node: ['ai_optimization', 'llm_responses', mode],
+  unbounded: true,
+});
+// https://dataforseo.com/pricing/ai-optimization/llm-mentions: $0.1 per task + $0.001 per row;
+// rows from 2025-08-01, the earliest date_from.
+// shortcut: docs examples bill $0.101 for 2–12 rows (maybe one row per task); the estimate counts
+// every row, a worst case; lower it if real costs confirm.
+const mentions = (api: string, results: Results): Rule => ({
+  path: `/v3/ai_optimization/llm_mentions/${api}/live`,
+  node: ['ai_optimization', 'llm_mentions', api, 'live'],
+  results,
+});
+const AI_RULES: Rule[] = [
+  ...['chat_gpt', 'claude', 'gemini'].flatMap((m) => [llm(m, 'live'), llm(m, 'task_post')]),
+  llm('perplexity', 'live'),
+  // https://dataforseo.com/pricing/ai-optimization/llm-scraper: "billed for each results page".
+  ...['chat_gpt', 'gemini'].flatMap((model) =>
+    QUEUE_AND_LIVE.map((mode) => ({
+      path: `/v3/ai_optimization/${model}/llm_scraper/${mode.join('/')}`,
+      node: ['ai_optimization', 'llm_scraper', ...mode],
+    })),
+  ),
+  ...[
+    'search_mentions',
+    'target_metrics_lite',
+    'top_mentioned_domains',
+    'top_mentioned_pages',
+    'top_mentioned_brands',
+    'top_mentioned_brand_categories',
+    'top_mentioned_domains_lite',
+    'top_mentioned_pages_lite',
+    'top_mentioned_brands_lite',
+    'top_mentioned_brand_categories_lite',
+  ].map((api) => mentions(api, LIMIT)),
+  mentions('target_metrics', { max: 1 }), // one aggregate object, items null
+  mentions('multi_target_metrics', each('targets', 10)), // one item per target set
+  mentions('historical', { span: { from: '2025-08-01', unit: 'month' } }),
+  ...['timeseries_delta', 'timeseries_new_lost'].map((api) =>
+    mentions(api, { span: { from: '2025-08-01', unit: 'month', by: 'group_range' } }),
+  ),
+  // https://dataforseo.com/pricing/ai-optimization/ai-keyword-search-volume: one row per keyword, ≤ 1,000.
+  {
+    path: '/v3/ai_optimization/ai_keyword_data/keywords_search_volume/live',
+    node: ['ai_optimization', 'ai_keyword_data', 'keywords_search_volume', 'live'],
+    results: each('keywords'),
+  },
+];
+
 export const RULES: Rule[] = [
   ...SERP_RULES,
   ...KEYWORDS_RULES,
   ...LABS_RULES,
   ...BACKLINKS_RULES,
   ...DOMAIN_RULES,
+  ...ON_PAGE_RULES,
+  ...CONTENT_RULES,
+  ...MERCHANT_RULES,
+  ...APP_RULES,
+  ...BUSINESS_RULES,
+  ...AI_RULES,
 ];
 const BY_PATH = new Map(RULES.map((r) => [r.path, r]));
 export const ruleFor = (specPath: string): Rule | undefined => BY_PATH.get(specPath);
@@ -415,6 +685,9 @@ function leafPrice(
   return usd;
 }
 
+// A body field in use: set and not false.
+const isSet = (v: unknown): boolean => v !== undefined && v !== null && v !== false;
+
 // Worst case of one call: the sum over its tasks (a GET is one request). `tree` is the stored
 // `price` node, undefined when dfs has none. `now` ends a date span with no date_to.
 export function estimate(
@@ -445,7 +718,7 @@ export function estimate(
     let add = 0;
     for (const x of rule.extras ?? []) {
       const v = task[x.field];
-      if (v === undefined || v === null || v === false || (x.when && !x.when.test(String(v)))) {
+      if (!isSet(v) || (x.when && !x.when.test(String(v))) || (x.unless && isSet(task[x.unless]))) {
         continue;
       }
       const n = typeof v === 'number' ? Math.max(0, v) : 1;
