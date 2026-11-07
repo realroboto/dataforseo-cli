@@ -1,6 +1,6 @@
 # dataforseo-cli (`dfs`)
 
-`dfs`: agent-first CLI for whole DataForSEO API, generated from official OpenAPI spec, with cost guard and local store. Status: in build. Catalog done (`--help`, `--version`, `schema`, `search`); calls not yet.
+`dfs`: agent-first CLI for whole DataForSEO API, generated from official OpenAPI spec, with cost guard and local store. Status: in build. Catalog done (`--help`, `--version`, `schema`, `search`). Calls done: one HTTP exchange, Store save before print, Compact output, `store show/list/path`. Price rules not yet: a paid call needs `--max-cost`.
 
 - Package manager: pnpm. Node runs `.ts` directly; tests `node --test` ([stack](docs/spec/distribution-stack.md)).
 - Checks: `pnpm typecheck && pnpm lint && pnpm test`; then `pnpm build && pnpm pack:check`. `pnpm spec:snapshot` (network) rewrites `spec/snapshot.json`; never edit it by hand.

@@ -1,6 +1,7 @@
 // Process io is injected so tests drive the whole CLI in-process (seam 1, docs/spec/testing.md).
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
+import { call, STORE_USAGE, store } from './call.ts';
 import { openCatalog } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import {
@@ -25,8 +26,7 @@ export type Io = {
 
 export async function run(argv: string[], io: Io): Promise<number> {
   try {
-    await dispatch(argv, io);
-    return 0;
+    return (await dispatch(argv, io)) ?? 0;
   } catch (e) {
     const err = e instanceof DfsError ? e : new DfsError(5, messageOf(e));
     io.stderr.write(`dfs: ${err.message}\n`);
@@ -43,7 +43,7 @@ function parse<T extends ParseArgsConfig['options']>(args: string[], options: T)
   }
 }
 
-async function dispatch(argv: string[], io: Io): Promise<void> {
+async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
   const catalog = openCatalog();
   const [first, ...rest] = argv;
 
@@ -81,19 +81,32 @@ async function dispatch(argv: string[], io: Io): Promise<void> {
     return;
   }
 
-  if (first === 'store') throw new DfsError(3, 'store: not in this build yet');
+  if (first === 'store') {
+    const args = parse(rest, {
+      help: { type: 'boolean' },
+      from: { type: 'string' },
+      full: { type: 'boolean' },
+    });
+    if (args.values.help || args.positionals.length === 0) {
+      io.stdout.write(`usage: ${STORE_USAGE}\n`);
+      return;
+    }
+    store(args, io);
+    return;
+  }
 
-  const { values, positionals } = parse(argv, { help: { type: 'boolean' } });
+  const { values, positionals } = parse(argv, {
+    help: { type: 'boolean' },
+    body: { type: 'string' },
+    full: { type: 'boolean' },
+    sandbox: { type: 'boolean' },
+    'max-cost': { type: 'string' },
+  });
   if (positionals.length === 0) {
     io.stdout.write(rootHelp(catalog.root, catalog));
     return;
   }
   const { node, params } = catalog.resolve(positionals);
-  if (node.endpoint && !values.help) {
-    throw new DfsError(
-      3,
-      `calls are not in this build yet; see: dfs ${positionals.join(' ')} --help`,
-    );
-  }
+  if (node.endpoint && !values.help) return call(catalog, node.endpoint, params, values, io);
   io.stdout.write(nodeHelp(node, params, catalog.spec));
 }

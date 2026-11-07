@@ -33,7 +33,7 @@ test('root --help lists the 12 modules and the hand commands', async () => {
     assert.equal(code, 0);
     const modules = stdout.split('modules:\n')[1].split('\n\n')[0].trim().split(/\s+/);
     assert.deepEqual(modules, MODULES);
-    for (const c of ['schema', 'search', 'store'])
+    for (const c of ['schema', 'search', 'store show', 'store list', 'store path'])
       assert.match(stdout, new RegExp(`^  ${c} `, 'm'));
   }
 });
@@ -80,15 +80,22 @@ test('an unknown word or flag exits 3 with nothing on stdout', async () => {
   assert.equal(stderr, "dfs: unknown command word 'nope' after 'dfs serp'; see: dfs serp --help\n");
 });
 
-test('an endpoint call and store exit 3 in this build, nothing sent', async () => {
-  for (const argv of [
-    ['on_page', 'content_parsing'],
-    ['store', 'path'],
-  ]) {
-    const { code, stderr } = await dfs(argv);
+test('store commands of later builds exit 3, nothing sent', async () => {
+  for (const sub of ['spend', 'search', 'sql', 'backup']) {
+    const { code, stderr } = await dfs(['store', sub]);
     assert.equal(code, 3);
-    assert.match(stderr, /not in this build yet/);
+    assert.equal(stderr, `dfs: store ${sub}: not in this build yet\n`);
   }
+});
+
+test('an endpoint --help shows how to call it', async () => {
+  const post = await dfs(['on_page', 'content_parsing', '--help']);
+  assert.match(
+    post.stdout,
+    /^call: dfs on_page content_parsing --body <json\|@file\|-> \[--full\] \[--sandbox\] \[--max-cost <usd>\]$/m,
+  );
+  const get = await dfs(['appendix', 'user_data', '--help']);
+  assert.match(get.stdout, /^call: dfs appendix user_data \[--full\]/m);
 });
 
 test('schema lists request fields, nested ones included', async () => {

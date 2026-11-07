@@ -1,5 +1,7 @@
-// Text for --help, --version, schema and search. Spec descriptions are HTML: shown as plain text.
-import type { Endpoint, Level, Spec } from './catalog.ts';
+// Render: help, schema and search text, and the Compact output of a response
+// (docs/spec/modules/render.md). Spec descriptions are HTML: shown as plain text.
+import { concretePath, type Endpoint, type Level, type Spec } from './catalog.ts';
+import { isRecord } from './json.ts';
 import { deref, fields, isNullable, type Schema, type Schemas } from './schema.ts';
 
 export const SCHEMA_USAGE = 'dfs schema <words…>';
@@ -33,7 +35,15 @@ export function rootHelp(root: Level, spec: { sha: string; date: string }): stri
   return `dfs: the DataForSEO API from the command line (spec ${spec.sha.slice(0, 7)}, ${spec.date.slice(0, 10)})
 
 usage: dfs <module> <words…> [--help]   list a level, or show an endpoint
+       dfs <endpoint words…> [flags]     call an endpoint
        dfs --version
+
+call flags:
+  --body <json|@file|->   tasks: a JSON object (one task) or array; @file; - reads stdin
+  --full                  print the exact API response, not the Compact output
+  --sandbox               send to the free sandbox, same credentials
+  --max-cost <usd>        send a call whose price dfs does not know yet
+  credentials: DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD from the environment
 
 modules:
 ${[...root.children.keys()]
@@ -43,7 +53,9 @@ ${[...root.children.keys()]
 commands:
   schema <words…>    request fields of an endpoint
   search "<words>"   find endpoints by path words and descriptions
-  store              the local Store of responses (not in this build yet)
+  store show <id>    reprint a saved response, no API call (--from <n>, --full)
+  store list         saved responses, newest first
+  store path         the Store file
 `;
 }
 
@@ -60,13 +72,16 @@ export function nodeHelp(node: Level, params: Record<string, string>, spec: Spec
   const lines = [command(node.words)];
   const ep = node.endpoint;
   if (ep) {
-    const path = ep.path.replace(/\{(\w+)\}/g, (m, name: string) =>
-      Object.hasOwn(params, name) ? encodeURIComponent(params[name]) : m,
+    lines.push(
+      `${ep.method.toUpperCase()} ${spec.servers?.[0]?.url ?? ''}${concretePath(ep, params)}`,
     );
-    lines.push(`${ep.method.toUpperCase()} ${spec.servers?.[0]?.url ?? ''}${path}`);
     const description = plainLines(ep.op.description);
     if (description.length > 0) lines.push('', ...description);
     if (ep.method === 'post') lines.push('', `request fields: dfs schema ${ep.words.join(' ')}`);
+    lines.push(
+      '',
+      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>]`,
+    );
   }
   const children = [...node.children].toSorted(([a], [b]) => a.localeCompare(b));
   if (children.length > 0 || node.param) {
@@ -125,3 +140,96 @@ export const searchText = (hits: Endpoint[]): string =>
     )
     .map((line) => `${line}\n`)
     .join('');
+
+// stdout and stderr together, per command, in UTF-16 code units (never fewer than characters).
+export const BUDGET = 9000;
+
+// Empty values removed: null, "", [], {}, also once their content is removed. An array keeps its
+// length, so an element shows in its empty form.
+export function prune(v: unknown): unknown {
+  if (Array.isArray(v)) {
+    const a = v.map((x) => prune(x) ?? (isRecord(x) ? {} : Array.isArray(x) ? [] : x));
+    return a.length > 0 ? a : undefined;
+  }
+  if (isRecord(v)) {
+    const entries = Object.entries(v)
+      .map(([k, x]) => [k, prune(x)] as const)
+      .filter(([, x]) => x !== undefined);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+  return v === null || v === '' ? undefined : v;
+}
+
+// One unit per item (`tasks[].result[].items[]`, else `tasks[].result[]`); `head` is the task
+// line printed before the first item of a task, or alone when the task has none.
+type Unit = { head?: Record<string, unknown>; item?: unknown };
+
+function* units(body: unknown): Generator<Unit> {
+  const tasks = isRecord(body) && Array.isArray(body.tasks) ? body.tasks : [];
+  for (const t of tasks) {
+    if (!isRecord(t)) continue;
+    const tag = isRecord(t.data) ? t.data.tag : undefined;
+    const task = { dfs: 'task', id: t.id, status_code: t.status_code, tag };
+    let named = false; // task line printed
+    for (const r of Array.isArray(t.result) ? t.result : []) {
+      if (isRecord(r) && Array.isArray(r.items)) {
+        const { items, ...rest } = r;
+        const head = { ...task, ...rest };
+        if (items.length === 0) yield { head };
+        for (const [k, item] of items.entries()) yield { head: k === 0 ? head : undefined, item };
+      } else {
+        yield { head: named ? undefined : task, item: r };
+      }
+      named = true;
+    }
+    if (!named) yield { head: task };
+  }
+}
+
+// shortcut: values pass JSON.parse, so an integer above 2^53 loses digits in Compact output
+// (--full keeps the API text); keep the source text once TypeScript types JSON.rawJSON.
+const line = (v: unknown): string => `${JSON.stringify(prune(v) ?? v)}\n`;
+
+// Compact output: items from number `from` (1-based) that fit in `room`, whole items only, then a
+// cut line naming the next command. An item that can never fit becomes an outline line.
+export function compact(body: unknown, id: string, from: number, room: number): string {
+  const all = [...units(body)];
+  const total = all.filter((u) => 'item' in u).length;
+  const cut = (shown: number) =>
+    line({ dfs: 'cut', shown, total, more: `dfs store show ${id} --from ${from + shown}` });
+  let out = '';
+  let shown = 0;
+  let n = 0; // item number
+  let task: Record<string, unknown> | undefined; // head of the current task
+  for (const [i, u] of all.entries()) {
+    const isItem = 'item' in u;
+    if (isItem) n++;
+    task = u.head ?? task;
+    if ((isItem ? n : n + 1) < from) continue;
+    // The first unit shown names its task, also when --from starts inside it.
+    const head = u.head ?? (out === '' ? task : undefined);
+    const headText = head ? line(head) : '';
+    const reserve = i < all.length - 1 ? cut(shown + 1).length : 0;
+    let itemText = isItem ? line(u.item) : '';
+    if (itemText.length > room - headText.length - reserve) {
+      itemText = line({
+        dfs: 'outline',
+        item: n,
+        keys: sizes(u.item),
+        more: `dfs store show ${id} --full`,
+      });
+    }
+    if (out.length + headText.length + itemText.length + reserve > room) return out + cut(shown);
+    out += headText + itemText;
+    if (isItem) shown++;
+  }
+  return out;
+}
+
+// Characters per top-level key of an item, for the outline line.
+function sizes(item: unknown): Record<string, number> {
+  const p = prune(item);
+  return isRecord(p)
+    ? Object.fromEntries(Object.entries(p).map(([k, v]) => [k, JSON.stringify(v).length]))
+    : {};
+}

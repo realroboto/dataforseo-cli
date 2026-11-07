@@ -45,6 +45,12 @@ const ROOT_WORDS = new Set(['schema', 'search', 'store', '+collect']);
 
 export const pathWords = (path: string): string[] => path.split('/').slice(2);
 
+// The spec path with its parameters filled; a parameter with no value stays `{name}`.
+export const concretePath = (ep: Endpoint, params: Record<string, string>): string =>
+  ep.path.replace(/\{(\w+)\}/g, (m, name: string) =>
+    Object.hasOwn(params, name) ? encodeURIComponent(params[name]) : m,
+  );
+
 // Structural check of an overlaid spec; [] when it is fit to use (Catalog, before swap).
 export function checkSpec(doc: unknown, previousPaths?: number): string[] {
   if (!isRecord(doc) || !isRecord(doc.paths) || !isRecord(doc.components)) {
