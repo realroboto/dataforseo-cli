@@ -15,7 +15,7 @@ import {
 import { search } from './search.ts';
 
 export type Io = {
-  env: NodeJS.ProcessEnv; // DFS_CONFIG_DIR
+  env: NodeJS.ProcessEnv; // DFS_CONFIG_DIR, DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   stdout: { write(chunk: string): unknown };
   stderr: { write(chunk: string): unknown };
