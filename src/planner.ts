@@ -1,6 +1,6 @@
 // Planner (docs/spec/modules/planner.md): pure. Endpoint + path values + tasks → call plan, or
 // exit 3 naming the field and the remedy. Nothing here touches the network.
-import { type Catalog, concretePath, type Endpoint, pathWords } from './catalog.ts';
+import { type Catalog, concretePath, type Endpoint, isLive } from './catalog.ts';
 import { DfsError } from './errors.ts';
 import { isRecord } from './json.ts';
 import { deref, type Fault, faults, fields, type Schema, type Schemas } from './schema.ts';
@@ -14,7 +14,7 @@ const TWENTY_TASK_PATHS = new Set([
   '/v3/on_page/page_screenshot',
 ]);
 const maxTasks = (path: string): number =>
-  TWENTY_TASK_PATHS.has(path) ? 20 : pathWords(path).includes('live') ? 1 : 100;
+  TWENTY_TASK_PATHS.has(path) ? 20 : isLive(path) ? 1 : 100;
 const MAX_FILTERS = 8;
 const FILTER_LIMIT = /8 filters maximum/i;
 

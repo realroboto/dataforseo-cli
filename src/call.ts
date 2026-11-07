@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { text } from 'node:stream/consumers';
 import pkg from '../package.json' with { type: 'json' };
-import type { Catalog, Endpoint } from './catalog.ts';
+import { type Catalog, type Endpoint, isLive } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { type Plan, plan } from './planner.ts';
@@ -113,6 +113,9 @@ function redactLogin(text: string, body: unknown): string {
   }
 }
 
+// 40103 is never retried by itself (transport.md): charging is unverified, so the agent decides.
+const FRESH = 'to send it again, add --fresh';
+
 // stderr lines after the status line, and the exit code: worst class wins, 2 > 1 > 6 > 0.
 function outcome(http: number, body: unknown, id: string): { lines: string[]; exit: number } {
   const show = `full response: dfs store show ${id} --full`;
@@ -125,11 +128,15 @@ function outcome(http: number, body: unknown, id: string): { lines: string[]; ex
     return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${owner}`], exit: 2 };
   }
   if (body.status_code !== 20000 || http >= 300) {
-    return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${show}`], exit: 1 };
+    const remedy = body.status_code === 40103 ? FRESH : show;
+    return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${remedy}`], exit: 1 };
   }
   const tasks = (Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
   const failed = tasks.filter((t) => !isOk(t.status_code));
-  const lines = failed.map((t) => `dfs: task ${t.id} failed ${t.status_code} ${t.status_message}`);
+  const lines = failed.map(
+    (t) =>
+      `dfs: task ${t.id} failed ${t.status_code} ${t.status_message}${t.status_code === 40103 ? ` — ${FRESH}` : ''}`,
+  );
   if (failed.some((t) => isAccount(http, t.status_code))) return { lines, exit: 2 };
   if (failed.length > 0 && failed.length === tasks.length) return { lines, exit: 1 };
   return { lines, exit: failed.length > 0 ? 6 : 0 };
@@ -200,14 +207,21 @@ async function exchange(
   catalog: Catalog,
   ep: Endpoint,
   planned: Plan,
-  opts: { sandbox: boolean; estimate: number | null },
+  opts: { sandbox: boolean; free: boolean; estimate: number | null },
   io: Io,
   warn: (w: string) => void,
 ) {
   const auth = authHeader(io.env);
   const { method, path } = planned;
   const body = planned.body && JSON.stringify(planned.body);
-  const res = await send(io.fetch, { method, url: planned.url, body, auth });
+  const res = await send(io, {
+    method,
+    url: planned.url,
+    body,
+    auth,
+    free: opts.free,
+    live: isLive(ep.path),
+  });
 
   const parsed = parseJson(res.text);
   const kept =
@@ -271,7 +285,14 @@ async function priceTree(
   let why: string;
   try {
     const planned = plan(catalog, ep, {}, undefined, { sandbox: false, validate: true });
-    const r = await exchange(catalog, ep, planned, { sandbox: false, estimate: 0 }, io, warn);
+    const r = await exchange(
+      catalog,
+      ep,
+      planned,
+      { sandbox: false, free: true, estimate: 0 },
+      io,
+      warn,
+    );
     if (r.price) return r.price;
     why = `${r.row.status_code ?? `HTTP ${r.res.status}`}, ${r.saved ? `see: dfs store show ${r.row.id}` : 'not saved'}`;
   } catch (e) {
@@ -340,7 +361,7 @@ export async function call(
     catalog,
     ep,
     planned,
-    { sandbox, estimate: est.usd },
+    { sandbox, free, estimate: est.usd },
     io,
     (w) => warnings.push(`dfs: warning: ${w}`),
   );

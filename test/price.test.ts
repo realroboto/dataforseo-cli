@@ -314,7 +314,7 @@ test('a tree older than 24 h is refreshed first; a failed refresh warns and uses
   assert.equal(none.code, 4);
   assert.match(none.stderr, /^dfs: warning: price tree refresh failed \(network error: net down/);
   assert.match(none.stderr, /; no price tree\n/);
-  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls.length, 5, 'user_data is free: 4 retries, then the paid call is refused');
 
   // --dry-run never refreshes.
   f = fakeFetch(paid);

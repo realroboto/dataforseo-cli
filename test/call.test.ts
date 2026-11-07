@@ -298,50 +298,56 @@ const task = (status_code: number, status_message = 'Ok.') => ({
 });
 
 test('exit 0, 1, 2 and 6 follow the exit table; every response is saved', async () => {
-  const cases: [string, Response, number, RegExp][] = [
-    ['HTTP 500', new Response('<html>oops</html>', { status: 500 }), 1, /^dfs: HTTP 500 — full/m],
+  // Fresh per call: a retried transient code reads the body again.
+  const cases: [string, () => Response, number, RegExp][] = [
+    [
+      'HTTP 500',
+      () => new Response('<html>oops</html>', { status: 500 }),
+      1,
+      /^dfs: HTTP 500 — full/m,
+    ],
     [
       'HTTP 401',
-      json(envelope(40100, 'You are not authorized.'), 401),
+      () => json(envelope(40100, 'You are not authorized.'), 401),
       2,
       /^dfs: 40100 You are not authorized\. — the account owner must act/m,
     ],
-    ['HTTP 402', json(envelope(40200, 'Payment Required.'), 402), 2, /^dfs: 40200 /m],
+    ['HTTP 402', () => json(envelope(40200, 'Payment Required.'), 402), 2, /^dfs: 40200 /m],
     [
       '40501',
-      json(envelope(40501, 'Invalid Field.')),
+      () => json(envelope(40501, 'Invalid Field.')),
       1,
       /^dfs: 40501 Invalid Field\. — full response: dfs store show r_/m,
     ],
-    ['50000', json(envelope(50000, 'Internal Error.')), 1, /^dfs: 50000 /m],
+    ['50000', () => json(envelope(50000, 'Internal Error.')), 1, /^dfs: 50000 /m],
     [
       'task 40210',
-      json(envelope(20000, 'Ok.', [task(20000), task(40210, 'Not enough money.')])),
+      () => json(envelope(20000, 'Ok.', [task(20000), task(40210, 'Not enough money.')])),
       2,
       /^dfs: task \S+ failed 40210 Not enough money\.$/m,
     ],
     [
       'all tasks failed',
-      json(envelope(20000, 'Ok.', [task(40501, 'Invalid Field.')])),
+      () => json(envelope(20000, 'Ok.', [task(40501, 'Invalid Field.')])),
       1,
       /^dfs: task \S+ failed 40501 /m,
     ],
     [
       'one task failed',
-      json(envelope(20000, 'Ok.', [task(20000), task(40501, 'Invalid Field.')])),
+      () => json(envelope(20000, 'Ok.', [task(20000), task(40501, 'Invalid Field.')])),
       6,
       /^dfs: task \S+ failed 40501 /m,
     ],
     [
       '40102 warning',
-      json(envelope(20000, 'Ok.', [task(40102, 'No Search Results.')])),
+      () => json(envelope(20000, 'Ok.', [task(40102, 'No Search Results.')])),
       0,
       /^dfs: 20000 /,
     ],
   ];
   for (const [name, res, exit, stderr] of cases) {
     const e = env();
-    const { fetch } = fakeFetch(() => res);
+    const { fetch } = fakeFetch(res);
     const r = await dfs(['appendix', 'user_data'], { env: e, fetch });
     assert.equal(r.code, exit, `${name}: ${r.stderr}`);
     assert.match(r.stderr, stderr, name);

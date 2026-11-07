@@ -44,6 +44,7 @@ const PARAM = /^\{(\w+)\}$/;
 const ROOT_WORDS = new Set(['schema', 'search', 'store', '+collect']);
 
 export const pathWords = (path: string): string[] => path.split('/').slice(2);
+export const isLive = (path: string): boolean => pathWords(path).includes('live');
 
 // The spec path with its parameters filled; a parameter with no value stays `{name}`.
 export const concretePath = (ep: Endpoint, params: Record<string, string>): string =>
