@@ -1,6 +1,10 @@
 # dataforseo-cli (`dfs`)
 
-`dfs` is an agent-first CLI for the whole DataForSEO API, generated from the official OpenAPI spec, with a cost guard and a local store. Status: pre-build; spec in issue #1.
+`dfs`: agent-first CLI for whole DataForSEO API, generated from official OpenAPI spec, with cost guard and local store. Status: pre-build.
+
+- Package manager: pnpm. Node runs `.ts` directly; tests `node --test` ([stack](docs/spec/distribution-stack.md)).
+- Spec: [docs/spec/index.md](docs/spec/index.md). Start with [overview](docs/spec/overview.md).
+- Docs bundle (OKF 0.2): [docs/index.md](docs/index.md).
 
 ## Agent skills
 

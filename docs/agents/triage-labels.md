@@ -1,3 +1,10 @@
+---
+type: Agent Convention
+title: Triage labels
+description: Map of the five canonical triage roles to label strings.
+generated: { by: process:setup-matt-pocock-skills, at: 2026-11-07T00:00:00Z }
+---
+
 # Triage Labels
 
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.

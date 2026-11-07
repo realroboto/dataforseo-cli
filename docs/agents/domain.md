@@ -1,3 +1,10 @@
+---
+type: Agent Convention
+title: Domain docs
+description: Where GLOSSARY.md and ADRs live and how agents read them.
+generated: { by: process:setup-matt-pocock-skills, at: 2026-11-07T00:00:00Z }
+---
+
 # Domain Docs
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.

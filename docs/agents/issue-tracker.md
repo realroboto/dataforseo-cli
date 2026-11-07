@@ -1,3 +1,10 @@
+---
+type: Agent Convention
+title: Issue tracker
+description: How agent skills read, create, link and close GitHub issues in this repo.
+generated: { by: process:setup-matt-pocock-skills, at: 2026-11-07T00:00:00Z }
+---
+
 # Issue tracker: GitHub
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.

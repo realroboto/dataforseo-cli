@@ -1,0 +1,20 @@
+---
+type: Module Design
+title: Planner module
+description: pure. Words + flags + body → call plan, or exit 3.
+generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T00:00:00Z }
+verified: [{ by: process:plan-verifier-blind-audit-9, at: 2026-11-07T00:00:00Z }]
+status: stable
+---
+
+# Planner module
+
+2. **Planner** — pure. Words + flags + body → call plan, or exit 3.
+   - Validates field names, JSON types and known limits only. Required fields and allowed values exist only as prose in the spec (r34:19), so the API judges them (34:161). That such refusals cost 0 is seen in one case only (open-seo #263, r34:70); charging of 405xx is unverified (r31:115).
+   - **Schema resolution (agent design, 2026-11-07).** The fields of an object = the union over its `properties`, `$ref`, `allOf`, `oneOf`, `anyOf` and `discriminator.mapping` targets, with a visited set against cycles. Reason: the `llm_mentions` endpoints keep `target[].domain` and `target[].keyword` only under `discriminator.mapping` of `BaseAiOptimizationLLmMentionsTargetElement`, and each mapped schema's `allOf` points back to that base (spec `55a4ed0`).
+   - Schema semantics: OpenAPI 3.0 Schema Objects over the overlaid spec (the vendor file is `openapi: 3.0.1`), not JSON Schema 2020-12. The Planner reads `type`, `nullable`, `properties`, `items`, `additionalProperties`, `$ref`, `allOf`, `oneOf`, `anyOf` and `discriminator`; other keywords are prose to it. `null` is valid only where `nullable: true` (common in spec `55a4ed0`); `null` on a typed node without it is a type fault. A schema with no `type` accepts any value; an object schema with no fields accepts any keys. No vendor-specific rule in the Planner. Pattern: `scripts/check-vendor-spec.py` `check()`.
+   - **`--no-validate` (agent design, 2026-11-07; amends 28:171).** Field names and JSON types against the spec become stderr warnings, and the request is sent. Bad JSON, body shape, task counts and the Cost guard still apply. Default stays strict (34:161). Reasons: charging of 405xx refusals is unverified, and a failed task can be charged (r31:112, r31:115), so a local refusal is the only sure $0; but the runtime check brings a new vendor spec within 24 h (34:88), so a new vendor fault can block a documented call before an overlay fix ships, and the mandate is 100% of the API (09:13). Precedent: `kubectl --validate`, default `strict`, `warn` and `ignore` as opt-in (kubernetes.io kubectl apply reference, read 2026-11-07).
+   - **Filter count (agent design, 2026-11-07).** For the ≤ 8 limit (28:69), only on fields whose own description states "8 filters maximum" (77 of the 85 filter fields in spec `55a4ed0`; the 7 `backlinks_filters` fields state no limit). `--no-validate` lifts it. Count: a `filters` array whose first item is a string is one condition; otherwise each array item at the top level is one condition, and `and`/`or` strings do not count. A nested group counts as one. Reason: neither the vendor spec nor the filters docs say how nested conditions count (docs.dataforseo.com/v3/dataforseo_labs/filters, read 2026-11-07). This count is never higher than the API's, so dfs never refuses a body the API accepts.
+   - Limits table: every POST ≤ 100 tasks (r20:39); a path whose words include `live` 1 task (r20:39); `on_page/instant_pages`, `on_page/content_parsing/live` and `on_page/page_screenshot` ≤ 20 (r31:154), by path, not by the word `live`; filters ≤ 8, counted as in Filter count (r20:41). `+run` splits any task count into posts of ≤ 100 (31:128).
+   - Builds the concrete URL from the spec `servers` (`api.dataforseo.com`, or `sandbox.dataforseo.com` with `--sandbox`; r34:16).
+   - Always requests the full response; never the `.ai` variant (28:124–125). `.xml`/`.html` suffixes are not offered (28:173).
