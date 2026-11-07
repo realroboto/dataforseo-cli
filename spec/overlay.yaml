@@ -192,3 +192,32 @@ actions:
   update:
     priority:
       type: integer
+# Vendor docs and sandbox, 2026-11-07: codes accept integer or numeric string; technology_paths items are {path, name} objects.
+- target: $['components']['schemas']['KeywordsDataBingAudienceEstimationTaskPostRequestInfo']['properties']['industry']['items']
+  remove: true
+- target: $['components']['schemas']['KeywordsDataBingAudienceEstimationTaskPostRequestInfo']['properties']['job_function']['items']
+  remove: true
+- target: $['components']['schemas']['KeywordsDataBingAudienceEstimationLiveRequestInfo']['properties']['industry']['items']
+  remove: true
+- target: $['components']['schemas']['KeywordsDataBingAudienceEstimationLiveRequestInfo']['properties']['job_function']['items']
+  remove: true
+- target: $['components']['schemas']['DataforseoLabsGoogleKeywordsForCategoriesLiveRequestInfo']['properties']['category_codes']['items']
+  remove: true
+- target: $['components']['schemas']['DataforseoLabsGoogleDomainMetricsByCategoriesLiveRequestInfo']['properties']['category_codes']['items']
+  remove: true
+- target: $['components']['schemas']['DomainAnalyticsTechnologiesDomainsByTechnologyLiveRequestInfo']['properties']['technology_paths']['items']
+  update:
+    type: object
+    properties:
+      path:
+        type: string
+      name:
+        type: string
+- target: $['components']['schemas']['DomainAnalyticsTechnologiesTechnologiesSummaryLiveRequestInfo']['properties']['technology_paths']['items']
+  update:
+    type: object
+    properties:
+      path:
+        type: string
+      name:
+        type: string

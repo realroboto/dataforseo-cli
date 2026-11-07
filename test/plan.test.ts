@@ -180,3 +180,32 @@ test('--dry-run of a GET: no body, 0 tasks; free path estimate 0 and guard send'
   assert.equal(sandbox.ceiling, 0.5);
   assert.equal(sandbox.guard, 'send');
 });
+
+// Vendor docs and sandbox, 2026-11-07: codes go as integers or numeric strings; technology
+// paths only as {path, name} objects.
+test('overlay: integer and string codes pass; technology_paths takes objects, not strings', async () => {
+  const tech = ['domain_analytics', 'technologies', 'domains_by_technology', 'live'];
+  const cases: [string[], unknown, number][] = [
+    [
+      ['keywords_data', 'bing', 'audience_estimation', 'live'],
+      { industry: [806303407], job_function: ['806298607'] },
+      0,
+    ],
+    [
+      ['dataforseo_labs', 'google', 'keywords_for_categories', 'live'],
+      { category_codes: [12191, '12193'] },
+      0,
+    ],
+    [
+      ['dataforseo_labs', 'google', 'domain_metrics_by_categories', 'live'],
+      { category_codes: [13418] },
+      0,
+    ],
+    [tech, { technology_paths: [{ path: 'content.cms', name: 'wordpress' }] }, 0],
+    [tech, { technology_paths: ['content.cms.wordpress'] }, 3],
+  ];
+  for (const [words, body, code] of cases) {
+    const r = await dry(words, body);
+    assert.equal(r.code, code, `${words.join(' ')} ${JSON.stringify(body)}: ${r.stderr}`);
+  }
+});
