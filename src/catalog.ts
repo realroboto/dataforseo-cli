@@ -175,3 +175,23 @@ export function openCatalog() {
 }
 
 export type Catalog = ReturnType<typeof openCatalog>;
+
+// Collect calls of a level by variant word; '' for a path with no variant word (lifecycle.md:
+// `task_get/<variant>/{id}`, bare `task_get/{id}`, or on_page `summary/{id}` when no task_get).
+export function collectPaths(level: Level): Map<string, Endpoint> {
+  const out = new Map<string, Endpoint>();
+  const get = level.children.get('task_get');
+  const bare = get?.param?.node.endpoint;
+  if (bare) out.set('', bare);
+  for (const [w, n] of get?.children ?? []) {
+    const ep = n.param?.node.endpoint;
+    if (ep) out.set(w, ep);
+  }
+  const summary = level.children.get('summary')?.param?.node.endpoint;
+  if (!get && summary) out.set('', summary);
+  return out;
+}
+
+// A level has `+run` when it has task_post and a collect call.
+export const hasRun = (level: Level): boolean =>
+  level.children.get('task_post')?.endpoint !== undefined && collectPaths(level).size > 0;

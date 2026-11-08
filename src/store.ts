@@ -63,6 +63,22 @@ const PRICE = `CREATE TABLE price (
   tree BLOB NOT NULL
 )`;
 
+// Added in user_version 4: one row per DataForSEO task id (store.md, `task`).
+const TASK = `CREATE TABLE task (
+  id TEXT PRIMARY KEY,
+  post_response TEXT NOT NULL,
+  path TEXT NOT NULL,
+  variant TEXT,
+  state TEXT NOT NULL,
+  status_code INTEGER,
+  cost REAL,
+  tag TEXT,
+  posted_at TEXT NOT NULL,
+  collected_at TEXT,
+  collect_response TEXT,
+  sandbox INTEGER NOT NULL
+)`;
+
 export const configDir = (env: NodeJS.ProcessEnv): string =>
   env.DFS_CONFIG_DIR || join(homedir(), '.config', 'dfs');
 export const storeFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'store.db');
@@ -114,6 +130,7 @@ export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
     if (user_version < 1) db.exec(`BEGIN; ${SCHEMA}; PRAGMA user_version = 1; COMMIT`);
     if (user_version < 2) db.exec(`BEGIN; ${PRICE}; PRAGMA user_version = 2; COMMIT`);
     if (user_version < 3) db.exec(`BEGIN; ${REUSE}; PRAGMA user_version = 3; COMMIT`);
+    if (user_version < 4) db.exec(`BEGIN; ${TASK}; PRAGMA user_version = 4; COMMIT`);
     importUnsaved(db, env);
     return db;
   } catch (e) {
@@ -203,3 +220,57 @@ export const writePrice = (db: DatabaseSync, { at, tree }: Price): void => {
     JSON.stringify(tree),
   );
 };
+
+export type TaskState = 'pending' | 'collected' | 'failed' | 'expired';
+export type Task = {
+  id: string;
+  post_response: string; // response id of the post
+  path: string; // task_post spec path
+  variant: string | null; // collect variant; null: the level has one collect path with no word
+  state: TaskState;
+  status_code: number | null; // last known task code
+  cost: number | null;
+  tag: string | null;
+  posted_at: string; // ISO 8601
+  collected_at: string | null;
+  collect_response: string | null;
+  sandbox: 0 | 1;
+};
+
+const TASK_COLUMNS: (keyof Task)[] = [
+  'id',
+  'post_response',
+  'path',
+  'variant',
+  'state',
+  'status_code',
+  'cost',
+  'tag',
+  'posted_at',
+  'collected_at',
+  'collect_response',
+  'sandbox',
+];
+
+// A task already in the Store keeps its row: a replayed post never resets a task's state.
+export function insertTasks(db: DatabaseSync, tasks: Task[]): void {
+  const stmt = db.prepare(
+    `INSERT INTO task (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map(() => '?').join(', ')}) ON CONFLICT (id) DO NOTHING`,
+  );
+  for (const t of tasks) stmt.run(...TASK_COLUMNS.map((c) => t[c] ?? null));
+}
+
+export const getTask = (db: DatabaseSync, id: string): Task | undefined =>
+  db.prepare('SELECT * FROM task WHERE id = ?').get(id) as Task | undefined;
+
+// A later report replaces the cost only when non-zero (store.md, `task` cost rule).
+export function updateTask(
+  db: DatabaseSync,
+  id: string,
+  u: Pick<Task, 'state' | 'status_code' | 'collected_at' | 'collect_response' | 'cost'>,
+): void {
+  db.prepare(
+    `UPDATE task SET state = ?, status_code = ?, collected_at = ?, collect_response = ?,
+     cost = CASE WHEN ? IS NOT NULL AND ? != 0 THEN ? ELSE cost END WHERE id = ?`,
+  ).run(u.state, u.status_code, u.collected_at, u.collect_response, u.cost, u.cost, u.cost, id);
+}

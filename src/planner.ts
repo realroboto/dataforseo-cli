@@ -60,7 +60,7 @@ export function plan(
   ep: Endpoint,
   params: Record<string, string>,
   tasks: unknown[] | undefined,
-  opts: { sandbox: boolean; validate: boolean },
+  opts: { sandbox: boolean; validate: boolean; first?: number }, // first: body index of tasks[0]
 ): Plan {
   const base = opts.sandbox
     ? SANDBOX
@@ -76,8 +76,8 @@ export function plan(
   const items = ep.op.requestBody?.content?.['application/json']?.schema?.items;
   const schemas = catalog.spec.components.schemas;
   const found = (tasks ?? []).flatMap((t, i) => [
-    ...faults(t, items, schemas, `body[${i}]`).map(describe),
-    ...filterFaults(t, items, schemas, `body[${i}]`),
+    ...faults(t, items, schemas, `body[${(opts.first ?? 0) + i}]`).map(describe),
+    ...filterFaults(t, items, schemas, `body[${(opts.first ?? 0) + i}]`),
   ]);
   if (found.length > 0) {
     if (!opts.validate) warnings.push(`${list(found)} — sent anyway: --no-validate`);

@@ -1,6 +1,6 @@
 // Render: help, schema and search text, and the Compact output of a response
 // (docs/spec/modules/render.md). Spec descriptions are HTML: shown as plain text.
-import { concretePath, type Endpoint, type Level, type Spec } from './catalog.ts';
+import { concretePath, type Endpoint, hasRun, type Level, type Spec } from './catalog.ts';
 import { isRecord } from './json.ts';
 import { deref, fields, isNullable, type Schema, type Schemas } from './schema.ts';
 
@@ -36,6 +36,7 @@ export function rootHelp(root: Level, spec: { sha: string; date: string }): stri
 
 usage: dfs <module> <words…> [--help]   list a level, or show an endpoint
        dfs <endpoint words…> [flags]     call an endpoint
+       dfs <level> +run [variant] --body …   post tasks, wait, collect (levels with task_post)
        dfs --version
 
 call flags:
@@ -46,9 +47,11 @@ call flags:
   --dry-run               validate, print the call plan as JSON; nothing sent, no credentials
   --no-validate           field name, type and filter faults warn instead of exit 3
   --fresh                 send even when a stored response is reusable
+  --wait <s>              +run: wait for tasks up to <s> seconds (default 90; 0 = post only)
   credentials: DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD from the environment
   cost guard: exit 4, nothing sent, when the estimate passes the ceiling or the price is unknown
   reuse: the same paid request within 12 h of a full success returns the stored response at $0
+  +run: exit 6 with the pending task ids when the wait ends; dfs +collect collects them later
 
 modules:
 ${[...root.children.keys()]
@@ -91,6 +94,9 @@ export function nodeHelp(node: Level, params: Record<string, string>, spec: Spec
   const children = [...node.children].toSorted(([a], [b]) => a.localeCompare(b));
   if (children.length > 0 || node.param) {
     lines.push('', 'children:', ...children.map(([w, n]) => childLine(w, n)));
+    if (hasRun(node)) {
+      lines.push(`  +run  post, wait and collect tasks: ${command(node.words)} +run --help`);
+    }
     if (node.param) lines.push(childLine(`<${node.param.name}>`, node.param.node));
   }
   return `${lines.join('\n')}\n`;

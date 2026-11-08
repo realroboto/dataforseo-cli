@@ -4,6 +4,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { call, STORE_USAGE, store } from './call.ts';
 import { openCatalog } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
+import { runTasks, runUsage } from './lifecycle.ts';
 import {
   nodeHelp,
   rootHelp,
@@ -104,11 +105,24 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
     'dry-run': { type: 'boolean' },
     'no-validate': { type: 'boolean' },
     fresh: { type: 'boolean' },
+    wait: { type: 'string' },
   });
   if (positionals.length === 0) {
     io.stdout.write(rootHelp(catalog.root, catalog));
     return;
   }
+  const at = positionals.indexOf('+run');
+  if (at >= 0) {
+    const { node } = catalog.resolve(positionals.slice(0, at));
+    const [variant, ...extra] = positionals.slice(at + 1);
+    if (extra.length > 0) throw new DfsError(3, `usage: ${runUsage(node)}`);
+    if (values.help) {
+      io.stdout.write(`usage: ${runUsage(node)}\n`);
+      return;
+    }
+    return runTasks(catalog, node, variant, values, io);
+  }
+  if (values.wait !== undefined) throw new DfsError(3, '--wait applies to +run only');
   const { node, params } = catalog.resolve(positionals);
   if (node.endpoint && !values.help) return call(catalog, node.endpoint, params, values, io);
   io.stdout.write(nodeHelp(node, params, catalog.spec));

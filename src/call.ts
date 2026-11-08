@@ -32,9 +32,9 @@ export const STORE_USAGE =
 // Exit table (docs/spec/exit-codes-flags.md): account codes exit 2; warnings that still exit 0.
 const ACCOUNT = new Set([40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207, 40210]);
 const OK_WARNING = new Set([40106, 40102, 40007]);
-const isAccount = (http: number, code: unknown) =>
+export const isAccount = (http: number, code: unknown) =>
   http === 401 || http === 402 || (typeof code === 'number' && ACCOUNT.has(code));
-const isOk = (code: unknown) =>
+export const isOk = (code: unknown) =>
   typeof code === 'number' && (Math.floor(code / 10_000) === 2 || OK_WARNING.has(code));
 
 export type CallFlags = {
@@ -48,7 +48,7 @@ export type CallFlags = {
 };
 
 // The tasks to send: a JSON object is one task, an array is the batch.
-async function readBody(
+export async function readBody(
   ep: Endpoint,
   arg: string | undefined,
   io: Io,
@@ -117,7 +117,11 @@ function redactLogin(text: string, body: unknown): string {
 const FRESH = 'to send it again, add --fresh';
 
 // stderr lines after the status line, and the exit code: worst class wins, 2 > 1 > 6 > 0.
-function outcome(http: number, body: unknown, id: string): { lines: string[]; exit: number } {
+export function outcome(
+  http: number,
+  body: unknown,
+  id: string,
+): { lines: string[]; exit: number } {
   const show = `full response: dfs store show ${id} --full`;
   const owner = 'the account owner must act: check credentials, balance and limits';
   if (!isRecord(body)) {
@@ -164,7 +168,7 @@ function reuseKey(planned: Plan, sandbox: boolean): string {
 }
 
 // The newest fully successful response of this request in the reuse window.
-function reusable(io: Io, planned: Plan, sandbox: boolean): Row | undefined {
+export function reusable(io: Io, planned: Plan, sandbox: boolean): Row | undefined {
   const since = new Date((io.now ?? Date.now)() - REUSE_WINDOW).toISOString();
   const db = openStore(io.env);
   try {
@@ -193,6 +197,13 @@ function parseUsd(name: string, value: string | undefined): number | undefined {
   return Number(value);
 }
 
+// The cost ceiling: --max-cost, else DFS_MAX_COST, else $1; `explicit` also sends unknown prices.
+export function ceilingOf(flags: CallFlags, io: Io): { ceiling: number; explicit: boolean } {
+  const explicit = parseUsd('--max-cost', flags['max-cost']);
+  const ceiling = explicit ?? parseUsd('DFS_MAX_COST', io.env.DFS_MAX_COST || undefined) ?? 1;
+  return { ceiling, explicit: explicit !== undefined };
+}
+
 // The `price` node of a user_data response with envelope 20000.
 function priceNode(body: unknown): Record<string, unknown> | undefined {
   if (!isRecord(body) || body.status_code !== 20000 || !Array.isArray(body.tasks)) return undefined;
@@ -203,7 +214,7 @@ function priceNode(body: unknown): Record<string, unknown> | undefined {
 
 // One HTTP exchange, saved to the Store before anything prints. A good non-sandbox user_data
 // response also writes the price tree (pricing.md); sandbox prices are dummy data.
-async function exchange(
+export async function exchange(
   catalog: Catalog,
   ep: Endpoint,
   planned: Plan,
@@ -265,7 +276,7 @@ async function exchange(
 
 // The stored price tree. Before a send it is refreshed first when older than 24 h or absent and
 // credentials exist; a failed refresh warns and keeps the old tree.
-async function priceTree(
+export async function priceTree(
   catalog: Catalog,
   io: Io,
   refresh: boolean,
@@ -313,8 +324,7 @@ export async function call(
 ): Promise<number> {
   const tasks = await readBody(ep, flags.body, io);
   const sandbox = flags.sandbox === true;
-  const explicit = parseUsd('--max-cost', flags['max-cost']);
-  const ceiling = explicit ?? parseUsd('DFS_MAX_COST', io.env.DFS_MAX_COST || undefined) ?? 1;
+  const { ceiling, explicit } = ceilingOf(flags, io);
   const planned = plan(catalog, ep, params, tasks, { sandbox, validate: !flags['no-validate'] });
   // Warnings before the send print at once, so a failed send still shows them.
   let early = '';
@@ -338,7 +348,7 @@ export async function call(
     ? { usd: 0, basis: 'rule' }
     : estimate(rule, planned.body ?? [], price?.tree, (io.now ?? Date.now)());
   if (est.warning) warnEarly(est.warning);
-  const refusal = free ? undefined : guard(ep.path, est, ceiling, explicit !== undefined);
+  const refusal = free ? undefined : guard(ep.path, est, ceiling, explicit);
   if (flags['dry-run']) {
     const out = {
       method: planned.method,
@@ -400,6 +410,26 @@ function replay(
   early: string, // warnings already printed; they count against the budget
 ): number {
   const warnings: string[] = [];
+  const status = reuseRow(catalog, ep, src, io, (w) => warnings.push(`dfs: warning: ${w}`));
+  const full = src.body as string;
+  const stderr = [status, ...warnings].map((l) => `${l}\n`).join('');
+  io.stderr.write(stderr);
+  io.stdout.write(
+    flags.full
+      ? `${full}\n`
+      : compact(JSON.parse(full), src.id, 1, BUDGET - early.length - stderr.length),
+  );
+  return 0;
+}
+
+// Saves the reuse row of a stored response; returns its status line.
+export function reuseRow(
+  catalog: Catalog,
+  ep: Endpoint,
+  src: Row,
+  io: Io,
+  warn: (w: string) => void,
+): string {
   const now = (io.now ?? Date.now)();
   const row: Row = {
     ...src,
@@ -413,16 +443,9 @@ function replay(
     body: null,
   };
   // The stored response stays the only copy of the data; a lost reuse row loses no data.
-  save(io.env, row, (w) => warnings.push(`dfs: warning: ${w}`));
-  const full = src.body as string;
-  const parsed = JSON.parse(full);
-  const status = `dfs: ${src.status_code} ${ep.path} tasks=${parsed.tasks_count ?? 0} cost=$0 est=$0 reused=${src.id} age=${age(now - Date.parse(src.time))}`;
-  const stderr = [status, ...warnings].map((l) => `${l}\n`).join('');
-  io.stderr.write(stderr);
-  io.stdout.write(
-    flags.full ? `${full}\n` : compact(parsed, src.id, 1, BUDGET - early.length - stderr.length),
-  );
-  return 0;
+  save(io.env, row, warn);
+  const parsed = JSON.parse(src.body as string);
+  return `dfs: ${src.status_code} ${ep.path} tasks=${parsed.tasks_count ?? 0} cost=$0 est=$0 reused=${src.id} age=${age(now - Date.parse(src.time))}`;
 }
 
 export function store(
