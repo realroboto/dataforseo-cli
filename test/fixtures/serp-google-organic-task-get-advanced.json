@@ -1,0 +1,138 @@
+{
+  "version": "0.1.20261103",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0 sec.",
+  "cost": 0,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "11080643-3076-0066-2000-148023663e6b",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0 sec.",
+      "cost": 0,
+      "result_count": 1,
+      "path": [
+        "v3",
+        "serp",
+        "google",
+        "organic",
+        "task_get",
+        "advanced",
+        "11080643-3076-0066-2000-148023663e6b"
+      ],
+      "data": {
+        "api": "serp",
+        "function": "task_get",
+        "se": "google",
+        "se_type": "organic"
+      },
+      "result": [
+        {
+          "keyword": "pizza",
+          "type": "organic",
+          "se_domain": "google.com",
+          "location_code": 1006886,
+          "language_code": "en",
+          "check_url": "https://www.google.com/search?q=pizza&hl=en&gl=GB&ie=UTF-8&uule=w+CAIQIFISCXXeIa8LoNhHEZkq1d1aOpZS",
+          "datetime": "2026-11-06 11:12:08 +00:00",
+          "spell": null,
+          "refinement_chips": null,
+          "item_types": [
+            "find_results_on",
+            "local_pack",
+            "organic",
+            "people_also_ask",
+            "google_reviews",
+            "knowledge_graph"
+          ],
+          "se_results_count": 66,
+          "pages_count": 1,
+          "items_count": 17,
+          "items": [
+            {
+              "type": "find_results_on",
+              "rank_group": 1,
+              "rank_absolute": 1,
+              "page": 1,
+              "position": "left",
+              "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[1]/div[1]",
+              "items": [
+                {
+                  "type": "find_results_on_element",
+                  "title": "THE 10 BEST Pizza Places in Watford (Updated 2026)",
+                  "domain": "google.com",
+                  "url": "https://google.com/goto?url=CAESkwEBxCJF1wk5s0X2kAT2b0WIcymTAq9HSgW5VEalLZ8i_dq-ly9sF3gIu5RnQ417jy70NE9CwzGGbGdwkN68ezrtitfmeclMLuKgr7dr41k3Y2FrXnhUB0w2JdRBFxQCD2nl_WDrtWW4N_U_8gVSlZkRZhsCu3PZsYc_tx5p-bXleFFJECt-wXy3vcAtdxWA1Mi1j0Q",
+                  "source": "Tripadvisor"
+                },
+                {
+                  "type": "find_results_on_element",
+                  "title": "THE 10 BEST Pizza Takeaway in Sheffield 2026 - Order Pizza ...",
+                  "domain": "google.com",
+                  "url": "https://google.com/goto?url=CAESdQHEIkXXVlpmBnxHcn0rmHQZNXBxUorjEpVmKFOSaynPWpuHuiKmNVfN0BW5iaXZtp8kKiJGelWHdqKNKRGSpyALV5oWZoIXL9Xi1UbCBgte-g7Lljl_clJr-x37eK5TIBVRBKv_uz1LgT1lMa6vqec63Ast4w",
+                  "source": "ubereats"
+                },
+                {
+                  "type": "find_results_on_element",
+                  "title": "14 Pizza Restaurants near Leeds",
+                  "domain": "google.com",
+                  "url": "https://google.com/goto?url=CAEScQHEIkXXNq8kb_iKgx1IeK2pDaBb-mWWBYOJUkLS266SwoFy9nCvSC6DRkaujogY6rZV87qitLTexnzUyNPVH3ypwapokN66yKJWGWygdzynWIEDU2VdCIQAFE5TddYJRod4lllseCtqOXvlBZpf9cE1",
+                  "source": "squaremeal"
+                }
+              ],
+              "rectangle": null
+            },
+            {
+              "type": "local_pack",
+              "rank_group": 1,
+              "rank_absolute": 2,
+              "page": 1,
+              "position": "left",
+              "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[1]/div[1]/div[1]",
+              "title": "Breadstall Pizza",
+              "description": "92 Berwick St \n\" Pizza dough done perfect and not sloppy.\" \n",
+              "domain": "www.breadstall.com",
+              "phone": null,
+              "booking_url": null,
+              "url": "https://www.breadstall.com/",
+              "is_paid": false,
+              "rating": {
+                "rating_type": "Max5",
+                "value": 4.7,
+                "votes_count": 1600,
+                "rating_max": 5
+              },
+              "cid": "2140288112563615677",
+              "rectangle": null
+            },
+            {
+              "type": "local_pack",
+              "rank_group": 2,
+              "rank_absolute": 3,
+              "page": 1,
+              "position": "left",
+              "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[3]/div[1]/div[1]",
+              "title": "Berberè Pizzeria",
+              "description": "2 St Giles Square \n\" Pizzas were delicious and fairly priced.\" \n",
+              "domain": "www.berberepizzeria.co.uk",
+              "phone": "020 3781 1414",
+              "booking_url": null,
+              "url": "https://www.berberepizzeria.co.uk/",
+              "is_paid": false,
+              "rating": {
+                "rating_type": "Max5",
+                "value": 4.7,
+                "votes_count": 731,
+                "rating_max": 5
+              },
+              "cid": "5068270305308051307",
+              "rectangle": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

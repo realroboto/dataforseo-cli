@@ -1,0 +1,224 @@
+{
+  "version": "0.1.20261103",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0 sec.",
+  "cost": 0,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "11080643-3076-0272-2000-958db20f6b21",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0 sec.",
+      "cost": 0,
+      "result_count": 1,
+      "path": ["v3", "backlinks", "anchors", "live"],
+      "data": {
+        "api": "backlinks",
+        "function": "anchors",
+        "target": "forbes.com",
+        "limit": 4,
+        "order_by": ["backlinks,desc"],
+        "filters": ["anchor", "like", "%news%"]
+      },
+      "result": [
+        {
+          "target": "dataforseo.com",
+          "total_count": 5817,
+          "items_count": 10,
+          "items": [
+            {
+              "type": "backlinks_anchor",
+              "anchor": "dataforseo.com",
+              "rank": 48,
+              "backlinks": 703,
+              "first_seen": "2022-07-16 17:04:31 +00:00",
+              "lost_date": null,
+              "backlinks_spam_score": 14,
+              "broken_backlinks": 0,
+              "broken_pages": 0,
+              "referring_domains": 267,
+              "referring_domains_nofollow": 157,
+              "referring_main_domains": 262,
+              "referring_main_domains_nofollow": 156,
+              "referring_ips": 169,
+              "referring_subnets": 150,
+              "referring_pages": 616,
+              "referring_pages_nofollow": 437,
+              "referring_links_tld": {
+                "com": 384,
+                "dev": 37,
+                "io": 30,
+                "ai": 20,
+                "in": 17,
+                "net": 16,
+                "co.in": 13,
+                "pages.dev": 9,
+                "org": 9,
+                "de": 7
+              },
+              "referring_links_types": {
+                "anchor": 614,
+                "image": 2
+              },
+              "referring_links_attributes": {
+                "nofollow": 437,
+                "noopener": 386,
+                "noreferrer": 294,
+                "external": 13,
+                "ugc": 8,
+                "sponsored": 6
+              },
+              "referring_links_platform_types": {
+                "organization": 305,
+                "unknown": 267,
+                "ecommerce": 41,
+                "blogs": 34,
+                "cms": 25,
+                "message-boards": 2
+              },
+              "referring_links_semantic_locations": {
+                "main": 212,
+                "": 200,
+                "section": 126,
+                "article": 69,
+                "header": 5,
+                "details": 2,
+                "aside": 1,
+                "figure": 1
+              },
+              "referring_links_countries": {
+                "": 380,
+                "US": 74,
+                "IN": 37,
+                "IO": 31,
+                "WW": 30,
+                "AI": 20,
+                "DE": 9,
+                "CO": 6,
+                "CC": 5,
+                "ES": 3
+              }
+            },
+            {
+              "type": "backlinks_anchor",
+              "anchor": "Google Ads / DataForSEO",
+              "rank": 43,
+              "backlinks": 869,
+              "first_seen": "2026-10-28 01:58:53 +00:00",
+              "lost_date": null,
+              "backlinks_spam_score": 0,
+              "broken_backlinks": 869,
+              "broken_pages": 1,
+              "referring_domains": 1,
+              "referring_domains_nofollow": 0,
+              "referring_main_domains": 1,
+              "referring_main_domains_nofollow": 0,
+              "referring_ips": 1,
+              "referring_subnets": 1,
+              "referring_pages": 869,
+              "referring_pages_nofollow": 0,
+              "referring_links_tld": {
+                "com": 869
+              },
+              "referring_links_types": {
+                "anchor": 869
+              },
+              "referring_links_attributes": null,
+              "referring_links_platform_types": {
+                "blogs": 869,
+                "cms": 869,
+                "organization": 869
+              },
+              "referring_links_semantic_locations": {
+                "section": 869
+              },
+              "referring_links_countries": {
+                "US": 869
+              }
+            },
+            {
+              "type": "backlinks_anchor",
+              "anchor": "DataForSEO",
+              "rank": 42,
+              "backlinks": 13005,
+              "first_seen": "2019-02-16 11:51:11 +00:00",
+              "lost_date": null,
+              "backlinks_spam_score": 12,
+              "broken_backlinks": 5,
+              "broken_pages": 4,
+              "referring_domains": 946,
+              "referring_domains_nofollow": 300,
+              "referring_main_domains": 803,
+              "referring_main_domains_nofollow": 178,
+              "referring_ips": 653,
+              "referring_subnets": 478,
+              "referring_pages": 10082,
+              "referring_pages_nofollow": 8320,
+              "referring_links_tld": {
+                "best": 7683,
+                "com": 1536,
+                "org": 195,
+                "ai": 116,
+                "io": 58,
+                "ch": 47,
+                "net": 42,
+                "dev": 38,
+                "de": 36,
+                "co": 29
+              },
+              "referring_links_types": {
+                "anchor": 10074,
+                "image": 8
+              },
+              "referring_links_attributes": {
+                "noopener": 8714,
+                "nofollow": 8320,
+                "noreferrer": 647,
+                "ugc": 197,
+                "sponsored": 72,
+                "external": 33
+              },
+              "referring_links_platform_types": {
+                "organization": 9261,
+                "ecommerce": 4966,
+                "blogs": 665,
+                "cms": 646,
+                "unknown": 469,
+                "news": 74,
+                "message-boards": 4,
+                "wikis": 1
+              },
+              "referring_links_semantic_locations": {
+                "aside": 7691,
+                "article": 1052,
+                "section": 497,
+                "header": 304,
+                "": 195,
+                "footer": 168,
+                "main": 131,
+                "figure": 17,
+                "figcaption": 15,
+                "details": 12
+              },
+              "referring_links_countries": {
+                "WW": 7860,
+                "": 1164,
+                "US": 327,
+                "UA": 145,
+                "AI": 116,
+                "IO": 74,
+                "DE": 49,
+                "CH": 47,
+                "CO": 31,
+                "GB": 31
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

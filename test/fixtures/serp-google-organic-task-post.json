@@ -1,0 +1,77 @@
+{
+  "version": "0.1.20261103",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0 sec.",
+  "cost": 0,
+  "tasks_count": 3,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "11080643-3076-0066-2000-148023663e6b",
+      "status_code": 20100,
+      "status_message": "Task Created.",
+      "time": "0 sec.",
+      "cost": 0,
+      "result_count": 0,
+      "path": ["v3", "serp", "google", "organic", "task_post"],
+      "data": {
+        "api": "serp",
+        "function": "task_post",
+        "se": "google",
+        "se_type": "organic",
+        "language_code": "en",
+        "location_code": 2840,
+        "keyword": "albert einstein",
+        "device": "desktop",
+        "os": "windows"
+      },
+      "result": null
+    },
+    {
+      "id": "11080643-3076-0066-2000-6e3a280c472a",
+      "status_code": 20100,
+      "status_message": "Task Created.",
+      "time": "0 sec.",
+      "cost": 0,
+      "result_count": 0,
+      "path": ["v3", "serp", "google", "organic", "task_post"],
+      "data": {
+        "api": "serp",
+        "function": "task_post",
+        "se": "google",
+        "se_type": "organic",
+        "language_name": "English",
+        "location_name": "United States",
+        "keyword": "albert einstein",
+        "priority": 2,
+        "tag": "some_string_123",
+        "pingback_url": "https://your-server.com/pingscript?id=$id&tag=$tag",
+        "device": "desktop",
+        "os": "windows"
+      },
+      "result": null
+    },
+    {
+      "id": "11080643-3076-0066-2000-fb339e8714f6",
+      "status_code": 20100,
+      "status_message": "Task Created.",
+      "time": "0 sec.",
+      "cost": 0,
+      "result_count": 0,
+      "path": ["v3", "serp", "google", "organic", "task_post"],
+      "data": {
+        "api": "serp",
+        "function": "task_post",
+        "se": "google",
+        "se_type": "organic",
+        "url": "https://www.google.co.uk/search?q=albert%20einstein&hl=en&gl=GB&uule=w+CAIQIFISCXXeIa8LoNhHEZkq1d1aOpZS",
+        "postback_data": "html",
+        "postback_url": "https://your-server.com/postbackscript",
+        "device": "desktop",
+        "os": "windows"
+      },
+      "result": null
+    }
+  ]
+}
