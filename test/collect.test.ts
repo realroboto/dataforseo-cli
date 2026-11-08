@@ -366,6 +366,8 @@ test('task.cost: post 0.0006, task_get 0, id_list 0.0006 stays 0.0006; a later d
   const cost = () => query(e, 'SELECT cost FROM task')[0].cost;
   assert.equal((await dfs(['serp', '+collect'], { env: e, fetch, now })).code, 0);
   assert.equal(cost(), 0.0006);
+  const spend = await dfs(['store', 'spend'], { env: e, now });
+  assert.equal(spend.stdout, '{"dfs":"spend","since":null,"cost":0.0006,"tasks":1}\n');
   listed = 0.0011; // LLM Responses settles after completion
   const later = () => Date.parse('2026-11-07T13:00:00Z');
   assert.equal((await dfs(['serp', '+collect'], { env: e, fetch, now: later })).code, 0);

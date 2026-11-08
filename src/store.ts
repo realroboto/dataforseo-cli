@@ -12,8 +12,9 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { backup, DatabaseSync } from 'node:sqlite';
 import { messageOf } from './errors.ts';
+import { isRecord } from './json.ts';
 
 export type Row = {
   id: string; // r_…
@@ -85,6 +86,18 @@ const SYNC = `CREATE TABLE sync (
   last_pass TEXT NOT NULL
 )`;
 
+// Added in user_version 6: one row per item of a response (`tasks[].result[].items[]`, else
+// `tasks[].result[]`), every string value of the item, diacritics folded (store.md, `item_fts`).
+// `item` is the item number of `dfs store show <response> --from <item>`.
+const ITEM_FTS = `CREATE VIRTUAL TABLE item_fts USING fts5(
+  text,
+  response UNINDEXED,
+  item UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+)`;
+
+export const USER_VERSION = 6;
+
 export const configDir = (env: NodeJS.ProcessEnv): string =>
   env.DFS_CONFIG_DIR || join(homedir(), '.config', 'dfs');
 export const storeFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'store.db');
@@ -116,12 +129,57 @@ const ROW_COLUMNS: (keyof Row)[] = [
 
 // A fixed column list: an unsaved/ file names no SQL. On import the row may be in the Store
 // already (a run stopped between insert and file delete); only that id conflict is skipped.
+// The row and its item_fts rows commit together.
 const insert = (db: DatabaseSync, row: Row, onConflict = ''): void => {
   const marks = ROW_COLUMNS.map((c) => (c === 'body' ? 'jsonb(?)' : '?'));
-  db.prepare(
-    `INSERT INTO response (${ROW_COLUMNS.join(', ')}) VALUES (${marks.join(', ')}) ${onConflict}`,
-  ).run(...ROW_COLUMNS.map((c) => row[c] ?? null));
+  inTransaction(db, () => {
+    const { changes } = db
+      .prepare(
+        `INSERT INTO response (${ROW_COLUMNS.join(', ')}) VALUES (${marks.join(', ')}) ${onConflict}`,
+      )
+      .run(...ROW_COLUMNS.map((c) => row[c] ?? null));
+    if (changes > 0 && row.body !== null) indexItems(db, row.id, row.body);
+  });
 };
+
+function inTransaction(db: DatabaseSync, f: () => void): void {
+  db.exec('BEGIN IMMEDIATE'); // takes the write lock at once, under the busy timeout
+  try {
+    f();
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+// Items in the numbering of Compact output (render.ts `units`, `store show --from`).
+function* items(body: unknown): Generator<unknown> {
+  const tasks = isRecord(body) && Array.isArray(body.tasks) ? body.tasks : [];
+  for (const t of tasks) {
+    if (!isRecord(t)) continue;
+    for (const r of Array.isArray(t.result) ? t.result : []) {
+      if (isRecord(r) && Array.isArray(r.items)) yield* r.items;
+      else yield r;
+    }
+  }
+}
+
+function* strings(v: unknown): Generator<string> {
+  if (typeof v === 'string') yield v;
+  else if (Array.isArray(v)) for (const x of v) yield* strings(x);
+  else if (isRecord(v)) for (const x of Object.values(v)) yield* strings(x);
+}
+
+function indexItems(db: DatabaseSync, id: string, body: string): void {
+  const stmt = db.prepare('INSERT INTO item_fts (text, response, item) VALUES (?, ?, ?)');
+  let n = 0;
+  for (const item of items(JSON.parse(body))) {
+    n++;
+    const text = [...strings(item)].join('\n');
+    if (text) stmt.run(text, id, n);
+  }
+}
 
 // Opens (and creates) the Store, then imports the rows a failed save left in unsaved/.
 export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
@@ -131,19 +189,53 @@ export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
   chmodSync(file, 0o600);
   const db = new DatabaseSync(file, { timeout: 30_000 });
   try {
-    db.exec('PRAGMA journal_mode = WAL');
-    const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    if (user_version < 1) db.exec(`BEGIN; ${SCHEMA}; PRAGMA user_version = 1; COMMIT`);
-    if (user_version < 2) db.exec(`BEGIN; ${PRICE}; PRAGMA user_version = 2; COMMIT`);
-    if (user_version < 3) db.exec(`BEGIN; ${REUSE}; PRAGMA user_version = 3; COMMIT`);
-    if (user_version < 4) db.exec(`BEGIN; ${TASK}; PRAGMA user_version = 4; COMMIT`);
-    if (user_version < 5) db.exec(`BEGIN; ${SYNC}; PRAGMA user_version = 5; COMMIT`);
+    wal(db);
+    migrate(db);
     importUnsaved(db, env);
     return db;
   } catch (e) {
     db.close();
     throw e;
   }
+}
+
+// A new file switches to WAL under a lock SQLite does not wait for (SQLITE_BUSY, no busy
+// handler), so two processes that create the Store at once retry for the busy timeout.
+function wal(db: DatabaseSync): void {
+  const end = Date.now() + 30_000;
+  for (;;) {
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      return;
+    } catch (e) {
+      if ((e as { errcode?: number }).errcode !== 5 || Date.now() > end) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
+// Forward migration, one step per user_version (store.md, "Schema contract"). The version is read
+// inside the write transaction, so two processes never run the same step.
+function migrate(db: DatabaseSync): void {
+  const version = () =>
+    (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  if (version() >= USER_VERSION) return;
+  inTransaction(db, () => {
+    const v = version();
+    if (v < 1) db.exec(SCHEMA);
+    if (v < 2) db.exec(PRICE);
+    if (v < 3) db.exec(REUSE);
+    if (v < 4) db.exec(TASK);
+    if (v < 5) db.exec(SYNC);
+    if (v < 6) {
+      db.exec(ITEM_FTS);
+      const rows = db
+        .prepare('SELECT id, json(body) AS body FROM response WHERE body IS NOT NULL')
+        .all() as { id: string; body: string }[];
+      for (const r of rows) indexItems(db, r.id, r.body);
+    }
+    db.exec(`PRAGMA user_version = ${USER_VERSION}`);
+  });
 }
 
 function importUnsaved(db: DatabaseSync, env: NodeJS.ProcessEnv): void {
@@ -205,12 +297,84 @@ export const reuseRows = (db: DatabaseSync, key: string, since: string): Row[] =
     )
     .all(key, since) as Row[];
 
+// Response filters of `store list` and `store search`: `since` (ISO 8601) and a spec path prefix
+// (`/v3/serp/google` matches itself and every path below it).
+export type Filter = { since?: string; path?: string };
+
+const filterSql = ({ since, path }: Filter): { sql: string; args: string[] } => ({
+  sql: `time >= ?${path ? " AND substr(spec_path || '/', 1, length(?) + 1) = ? || '/'" : ''}`,
+  args: [since ?? '', ...(path ? [path, path] : [])],
+});
+
 // Newest first, no body.
-export const listRows = (db: DatabaseSync): Omit<Row, 'body'>[] =>
-  db.prepare(`SELECT ${COLUMNS} FROM response ORDER BY time DESC, rowid DESC`).all() as Omit<
-    Row,
-    'body'
-  >[];
+export function listRows(db: DatabaseSync, f: Filter = {}): Omit<Row, 'body'>[] {
+  const w = filterSql(f);
+  return db
+    .prepare(`SELECT ${COLUMNS} FROM response WHERE ${w.sql} ORDER BY time DESC, rowid DESC`)
+    .all(...w.args) as Omit<Row, 'body'>[];
+}
+
+export type Hit = { id: string; time: string; path: string; item: number; snippet: string };
+
+// Items whose strings hold every word (diacritics folded), newest response first. Each word is
+// an FTS5 string, so FTS5 syntax in the words is plain text.
+export function searchItems(db: DatabaseSync, words: string[], f: Filter = {}): Hit[] {
+  const query = words.map((w) => `"${w.replaceAll('"', '""')}"`).join(' ');
+  const w = filterSql(f);
+  return db
+    .prepare(
+      `SELECT r.id, r.time, r.spec_path AS path, item_fts.item AS item,
+       snippet(item_fts, 0, '[', ']', '…', 12) AS snippet
+       FROM item_fts JOIN response r ON r.id = item_fts.response
+       WHERE item_fts MATCH ? AND ${w.sql} ORDER BY r.time DESC, r.rowid DESC, item_fts.item`,
+    )
+    .all(query, ...w.args) as Hit[];
+}
+
+// `store spend` groups (store.md, "Spend source"): task.cost of non-sandbox tasks.
+const SPEND_KEYS = {
+  day: 'substr(posted_at, 1, 10)', // UTC day
+  module: "substr(path, 5, instr(substr(path, 5) || '/', '/') - 1)", // after /v3/
+  path: 'path',
+  tag: 'tag',
+} as const;
+export type SpendBy = keyof typeof SPEND_KEYS;
+export const SPEND_BY = Object.keys(SPEND_KEYS) as SpendBy[];
+export type Spend = { key?: string | null; cost: number; tasks: number };
+
+// Total first, then one row per group: days newest first, other groups by cost. Costs round to
+// 10 decimals, so float sums print as the API reports them.
+export function spend(db: DatabaseSync, since: string | undefined, by?: SpendBy): Spend[] {
+  const sql = (key: string) =>
+    `SELECT ${key} round(total(cost), 10) AS cost, count(*) AS tasks FROM task
+     WHERE sandbox = 0 AND posted_at >= ?`;
+  const total = db.prepare(sql('')).get(since ?? '') as Spend;
+  if (!by) return [total];
+  const order = by === 'day' ? 'key DESC' : 'cost DESC, key';
+  const groups = db
+    .prepare(`${sql(`${SPEND_KEYS[by]} AS key,`)} GROUP BY key ORDER BY ${order}`)
+    .all(since ?? '') as Spend[];
+  return [total, ...groups];
+}
+
+// A read-only connection to the Store (created and migrated first): writes fail in SQLite.
+export function openReadOnly(env: NodeJS.ProcessEnv): DatabaseSync {
+  openStore(env).close();
+  return new DatabaseSync(storeFile(env), { readOnly: true, timeout: 30_000 });
+}
+
+// A consistent copy of the Store in `file` (mode 600) while other processes write: one backup
+// step copies every page inside one read transaction, so writers never restart it.
+export async function backupStore(env: NodeJS.ProcessEnv, file: string): Promise<number> {
+  const db = openStore(env);
+  try {
+    closeSync(openSync(file, 'a', 0o600));
+    chmodSync(file, 0o600);
+    return await backup(db, file, { rate: 2 ** 31 - 1 });
+  } finally {
+    db.close();
+  }
+}
 
 export type Price = { at: string; tree: unknown }; // at: ISO 8601 fetch time
 

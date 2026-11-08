@@ -14,21 +14,17 @@ import { type Estimate, estimate, guard, isFree, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
 import {
-  getRow,
-  listRows,
+  insertTasks,
   openStore,
   type Price,
   type Row,
   readPrice,
   reuseRows,
   save,
-  storeFile,
+  type Task,
   writePrice,
 } from './store.ts';
 import { authHeader, send } from './transport.ts';
-
-export const STORE_USAGE =
-  'dfs store show <id> [--from <n>] [--full] | dfs store list | dfs store path';
 
 // Exit table (docs/spec/exit-codes-flags.md): account codes exit 2; warnings that still exit 0.
 const ACCOUNT = new Set([40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207, 40210]);
@@ -417,6 +413,43 @@ export async function sendPlanned(
       `dfs: warning: real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
     );
   }
+  // A call that charges at once (Live and the other paid paths that are not task_post) is
+  // collected at once: its tasks get rows now, for `store spend` (store.md, `task`).
+  if (!isFree(ep.path) && !ep.path.endsWith('/task_post')) {
+    const now = new Date((io.now ?? Date.now)()).toISOString();
+    const tasks = isRecord(parsed) && Array.isArray(parsed.tasks) ? parsed.tasks : [];
+    const rows: Task[] = tasks.filter(isRecord).flatMap((t) =>
+      typeof t.id === 'string'
+        ? [
+            {
+              id: t.id,
+              post_response: id,
+              path: ep.path,
+              variant: null,
+              state: isOk(t.status_code) ? 'collected' : 'failed',
+              status_code: typeof t.status_code === 'number' ? t.status_code : null,
+              cost: typeof t.cost === 'number' ? t.cost : null,
+              tag: isRecord(t.data) && typeof t.data.tag === 'string' ? t.data.tag : null,
+              posted_at: now,
+              collected_at: now,
+              collect_response: id,
+              sandbox: opts.sandbox ? 1 : 0,
+            },
+          ]
+        : [],
+    );
+    try {
+      const db = openStore(io.env);
+      try {
+        insertTasks(db, rows);
+      } finally {
+        db.close();
+      }
+    } catch (e) {
+      // The response row holds the cost; dfs +collect recovers the task row through id_list.
+      warnings.push(`dfs: warning: task rows not saved (${messageOf(e)})`);
+    }
+  }
   const { lines, exit } = outcome(res.status, parsed, id);
   const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;
   const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est.usd ?? '?'} saved=${id}`;
@@ -469,60 +502,4 @@ export function reuseRow(
   save(io.env, row, warn);
   const parsed = JSON.parse(src.body as string);
   return `dfs: ${src.status_code} ${ep.path} tasks=${parsed.tasks_count ?? 0} cost=$0 est=$0 reused=${src.id} age=${age(now - Date.parse(src.time))}`;
-}
-
-export function store(
-  args: { values: { from?: string; full?: boolean }; positionals: string[] },
-  io: Io,
-) {
-  const [sub, id, ...extra] = args.positionals;
-  if (sub === 'path' && id === undefined) {
-    io.stdout.write(`${storeFile(io.env)}\n`);
-    return;
-  }
-  if (sub === 'show' && id !== undefined && extra.length === 0) {
-    const from = Number(args.values.from ?? 1);
-    if (!Number.isInteger(from) || from < 1) {
-      throw new DfsError(3, `--from ${args.values.from}: want a whole number, 1 or more`);
-    }
-    const db = openStore(io.env);
-    try {
-      const row = getRow(db, id);
-      if (!row) throw new DfsError(3, `no response ${id} in the Store; see: dfs store list`);
-      if (row.body === null)
-        throw new DfsError(3, `${id} has no JSON body (HTTP ${row.http_status})`);
-      io.stdout.write(
-        args.values.full ? `${row.body}\n` : compact(JSON.parse(row.body), id, from, BUDGET),
-      );
-    } finally {
-      db.close();
-    }
-    return;
-  }
-  if (sub === 'list' && id === undefined) {
-    const db = openStore(io.env);
-    try {
-      const rows = listRows(db);
-      let out = '';
-      const cut = (shown: number) =>
-        `${JSON.stringify({ dfs: 'cut', shown, total: rows.length })}\n`;
-      for (const [i, r] of rows.entries()) {
-        const next = `${JSON.stringify(r)}\n`;
-        const reserve = i < rows.length - 1 ? cut(i + 1).length : 0;
-        if (out.length + next.length + reserve > BUDGET) {
-          out += cut(i);
-          break;
-        }
-        out += next;
-      }
-      io.stdout.write(out);
-    } finally {
-      db.close();
-    }
-    return;
-  }
-  if (['spend', 'search', 'sql', 'backup'].includes(sub)) {
-    throw new DfsError(3, `store ${sub}: not in this build yet`);
-  }
-  throw new DfsError(3, `usage: ${STORE_USAGE}`);
 }

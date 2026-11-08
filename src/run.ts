@@ -1,7 +1,7 @@
 // Process io is injected so tests drive the whole CLI in-process (seam 1, docs/spec/testing.md).
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
-import { call, STORE_USAGE, store } from './call.ts';
+import { call } from './call.ts';
 import { dailyCheck, openCatalog, readNewest } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { COLLECT_USAGE, collectAll, runTasks, runUsage } from './lifecycle.ts';
@@ -14,6 +14,7 @@ import {
   searchText,
 } from './render.ts';
 import { search } from './search.ts';
+import { STORE_USAGE, store } from './store-cli.ts';
 
 export type Io = {
   env: NodeJS.ProcessEnv; // DFS_CONFIG_DIR, DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD
@@ -88,12 +89,16 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
       help: { type: 'boolean' },
       from: { type: 'string' },
       full: { type: 'boolean' },
+      since: { type: 'string' },
+      path: { type: 'string' },
+      by: { type: 'string' },
     });
     if (args.values.help || args.positionals.length === 0) {
       io.stdout.write(`usage: ${STORE_USAGE}\n`);
       return;
     }
-    store(args, io);
+    const { help: _, ...values } = args.values;
+    await store({ values, positionals: args.positionals }, io);
     return;
   }
 
