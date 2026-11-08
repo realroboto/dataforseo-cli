@@ -1,4 +1,5 @@
 // `dfs store …`: read the Store with no API call (docs/spec/modules/store.md, Commands).
+import { closeSync, openSync } from 'node:fs';
 import { DfsError, messageOf } from './errors.ts';
 import { BUDGET, compact } from './render.ts';
 import type { Io } from './run.ts';
@@ -50,20 +51,33 @@ export async function store(
 ): Promise<void> {
   const { values: v } = args;
   const [sub, ...rest] = args.positionals;
-  const allowed = FLAGS[sub];
+  const allowed = Object.hasOwn(FLAGS, sub) ? FLAGS[sub] : undefined;
   const usage = new DfsError(3, `usage: ${STORE_USAGE}`);
   if (!allowed) throw usage;
   const extra = Object.keys(v).filter((k) => !allowed.includes(k as keyof StoreFlags));
   if (extra.length > 0)
     throw new DfsError(3, `store ${sub} takes no --${extra[0]}; usage: ${STORE_USAGE}`);
-  const arity = { show: 1, sql: 1, backup: 1, search: -1 }[sub] ?? 0;
-  if (arity === -1 ? rest.length === 0 : rest.length !== arity) throw usage;
+  const words = rest.join(' ').split(/\s+/).filter(Boolean);
+  const arity = ({ show: 1, sql: 1, backup: 1 } as Record<string, number>)[sub] ?? 0;
+  if (sub === 'search' ? words.length === 0 : rest.length !== arity) throw usage;
 
   if (sub === 'path') {
     io.stdout.write(`${storeFile(io.env)}\n`);
     return;
   }
   if (sub === 'backup') {
+    // backup() overwrites its target, so only a new file is taken: an existing one may be other data.
+    try {
+      closeSync(openSync(rest[0], 'wx', 0o600));
+    } catch (e) {
+      const exists = (e as NodeJS.ErrnoException).code === 'EEXIST';
+      throw new DfsError(
+        3,
+        exists
+          ? `${rest[0]} exists — remove it first or name a new file`
+          : `store backup: ${messageOf(e)}`,
+      );
+    }
     await backupStore(io.env, rest[0]);
     io.stdout.write(`${rest[0]}\n`);
     return;
@@ -74,8 +88,7 @@ export async function store(
     if (sub === 'show') return show(db, rest[0], v, io);
     const f: Filter = { since: since(v.since, io), path: pathOf(v.path) };
     if (sub === 'list') io.stdout.write(fit(listRows(db, f)));
-    if (sub === 'search')
-      io.stdout.write(fit(searchItems(db, rest.join(' ').split(/\s+/), f).map(hit)));
+    if (sub === 'search') io.stdout.write(fit(searchItems(db, words, f).map(hit)));
     if (sub === 'spend') {
       if (v.by !== undefined && !SPEND_BY.includes(v.by as SpendBy)) {
         throw new DfsError(3, `--by ${v.by}: want ${SPEND_BY.join(', ')}`);

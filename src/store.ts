@@ -363,13 +363,11 @@ export function openReadOnly(env: NodeJS.ProcessEnv): DatabaseSync {
   return new DatabaseSync(storeFile(env), { readOnly: true, timeout: 30_000 });
 }
 
-// A consistent copy of the Store in `file` (mode 600) while other processes write: one backup
-// step copies every page inside one read transaction, so writers never restart it.
+// A consistent copy of the Store in `file` (the caller creates it, mode 600) while other processes
+// write: one backup step copies every page inside one read transaction, so writers never restart it.
 export async function backupStore(env: NodeJS.ProcessEnv, file: string): Promise<number> {
   const db = openStore(env);
   try {
-    closeSync(openSync(file, 'a', 0o600));
-    chmodSync(file, 0o600);
     return await backup(db, file, { rate: 2 ** 31 - 1 });
   } finally {
     db.close();

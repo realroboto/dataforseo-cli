@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { fakeFetch } from './helpers/fetch.ts';
 import { dfs } from './helpers/io.ts';
@@ -193,6 +194,10 @@ test('store search, list and spend usage faults exit 3', async () => {
     ['store', 'sql'],
     ['store', 'backup'],
     ['store', 'nope'],
+    ['store', 'search', ' ', ''],
+    ['store', 'constructor', '--since', '1d'],
+    ['store', 'backup', join(e.DFS_CONFIG_DIR, 'no', 'dir', 'x.db')],
+    ['store', 'backup', join(e.DFS_CONFIG_DIR, 'spec-check.json')],
   ]) {
     const r = await dfs(argv, { env: e });
     assert.equal(r.code, 3, argv.join(' '));
@@ -286,6 +291,8 @@ test('store spend sums non-sandbox task.cost once per task, by tag, day, module 
 });
 
 const STORE_TS = new URL('../src/store.ts', import.meta.url).href;
+const BIN = fileURLToPath(new URL('../bin/dfs.ts', import.meta.url));
+const FAKE_API = new URL('./helpers/fake-api.ts', import.meta.url).href;
 // A separate dfs process that saves `count` rows through the Store module.
 const writer = (dir: string, prefix: string, count: number) =>
   promisify(execFile)(
@@ -314,6 +321,21 @@ test('two dfs processes write one Store at once without loss (seam 2)', async ()
   const e = { DFS_CONFIG_DIR: dir };
   assert.deepEqual(query(e, 'SELECT count(*) AS c FROM response'), [{ c: 300 }]);
   assert.deepEqual(query(e, 'SELECT count(*) AS c FROM item_fts'), [{ c: 300 }]);
+  assert.equal(existsSync(join(dir, 'unsaved')), false, 'no save fell back to unsaved/');
+});
+
+test('two dfs bin processes create and write one Store at once (seam 2)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfs-bins-'));
+  writeFileSync(join(dir, 'spec-check.json'), JSON.stringify({ checked: Date.now() }));
+  const bin = () =>
+    promisify(execFile)('node', ['--import', FAKE_API, BIN, 'appendix', 'user_data'], {
+      env: { ...process.env, ...LOGIN, DFS_CONFIG_DIR: dir },
+    });
+  const runs = await Promise.all([1, 2, 3, 4].map(() => bin()));
+  for (const r of runs) assert.doesNotMatch(r.stderr, /warning/, r.stderr);
+  assert.deepEqual(query({ DFS_CONFIG_DIR: dir }, 'SELECT count(*) AS c FROM response'), [
+    { c: 4 },
+  ]);
   assert.equal(existsSync(join(dir, 'unsaved')), false, 'no save fell back to unsaved/');
 });
 
