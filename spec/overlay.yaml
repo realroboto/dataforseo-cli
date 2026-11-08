@@ -221,3 +221,7 @@ actions:
         type: string
       name:
         type: string
+# Vendor docs and sandbox, 2026-11-08 (#26): Amazon language_code is `en_US` form; example `en` gives 40501.
+- target: $['paths']['/v3/merchant/amazon/sellers/task_post']['post']['requestBody']['content']['application/json']['schema']['example'][0]
+  update:
+    language_code: en_US

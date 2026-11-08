@@ -1,5 +1,6 @@
 // pnpm test:sandbox (seam 3, docs/spec/testing.md): every request example through `dfs --sandbox`
-// unmodified on the overlaid snapshot, Standard tasks collected, plus the id_list hand path.
+// on the overlaid snapshot, unmodified but for time-bound dates, Standard tasks collected, plus
+// the id_list hand path.
 // Fails on a new 40404 or any other error; writes the 40404 file. Mac only: the DataForSEO login
 // never goes to GitHub.
 import { execFileSync } from 'node:child_process';
@@ -22,6 +23,47 @@ type Sent = { exit: number; envelopes: unknown[]; stderr: string };
 
 const NO_DATA = 40404;
 const POOL = 4;
+const DAY = 86_400_000;
+
+// Vendor checks these example dates against now (field docs in the spec): each date pair moves
+// by whole days so `anchor` lands `days` from now; span and every other value stay as written.
+const TIME_BOUND: { path: RegExp; fields: string[]; anchor: string; days: number }[] = [
+  // datetime_from: at most one month back with include_metadata; datetime_to: before now.
+  { path: /\/id_list$/, fields: ['datetime_from', 'datetime_to'], anchor: 'datetime_to', days: -1 },
+  // check_in: not before today.
+  {
+    path: /\/hotel_searches\/(task_post|live)$/,
+    fields: ['check_in', 'check_out'],
+    anchor: 'check_in',
+    days: 7,
+  },
+];
+// `yyyy-mm-dd`, optional ` hh:mm:ss`, then any suffix (` +00:00`) kept as is.
+const DATE = /^(\d{4}-\d\d-\d\d)( \d\d:\d\d:\d\d)?(.*)$/;
+const ms = (v: unknown) => {
+  const m = typeof v === 'string' ? DATE.exec(v) : null;
+  return m ? Date.parse(`${m[1]}T${m[2]?.trim() ?? '00:00:00'}Z`) : Number.NaN;
+};
+const shiftDate = (v: string, delta: number) => {
+  const [, , time, rest] = DATE.exec(v) ?? [];
+  const iso = new Date(ms(v) + delta).toISOString();
+  return `${iso.slice(0, 10)}${time ? ` ${iso.slice(11, 19)}` : ''}${rest}`;
+};
+
+export function inWindow(path: string, body: unknown[], now: number): unknown[] {
+  const rule = TIME_BOUND.find((r) => r.path.test(path));
+  if (!rule) return body;
+  return body.map((task) => {
+    if (!isRecord(task) || Number.isNaN(ms(task[rule.anchor]))) return task;
+    const delta = Math.round((now + rule.days * DAY - ms(task[rule.anchor])) / DAY) * DAY;
+    const out = { ...task };
+    for (const f of rule.fields) {
+      const v = task[f];
+      if (typeof v === 'string' && !Number.isNaN(ms(v))) out[f] = shiftDate(v, delta);
+    }
+    return out;
+  });
+}
 
 // A fresh config dir whose daily spec check counts as done: the run tests the snapshot it ships.
 export function sandboxEnv(env: NodeJS.ProcessEnv, now: () => number): NodeJS.ProcessEnv {
@@ -89,7 +131,8 @@ export async function sandboxRun(
 
   // A task_post example also collects each returned id through every collect call of its level.
   async function example(ep: Endpoint, body: unknown) {
-    const s = await send([...ep.words, '--sandbox', '--body', JSON.stringify(body)], base);
+    const sent = JSON.stringify(Array.isArray(body) ? inWindow(ep.path, body, now()) : body);
+    const s = await send([...ep.words, '--sandbox', '--body', sent], base);
     judge(ep.path, s);
     if (s.exit !== 0 || !ep.path.endsWith('/task_post')) return;
     const level = catalog.resolve(ep.words.slice(0, -1)).node;
@@ -125,7 +168,7 @@ export async function sandboxRun(
     };
     try {
       if (!Array.isArray(ex)) throw new DfsError(3, 'spec has no /v3/serp/id_list example');
-      const planned = plan(catalog, ep, {}, ex, {
+      const planned = plan(catalog, ep, {}, inWindow(HAND_ID_LIST, ex, now()), {
         sandbox: true,
         validate: false,
       });

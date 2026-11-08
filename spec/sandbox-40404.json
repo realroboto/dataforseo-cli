@@ -4,6 +4,17 @@
   "paths": [
     "/v3/ai_optimization/claude/llm_responses/live",
     "/v3/ai_optimization/claude/llm_responses/task_get/{id}",
-    "/v3/on_page/lighthouse/task_get/json/{id}"
+    "/v3/ai_optimization/id_list",
+    "/v3/app_data/id_list",
+    "/v3/backlinks/id_list",
+    "/v3/business_data/id_list",
+    "/v3/content_analysis/id_list",
+    "/v3/dataforseo_labs/id_list",
+    "/v3/domain_analytics/id_list",
+    "/v3/keywords_data/id_list",
+    "/v3/merchant/id_list",
+    "/v3/on_page/id_list",
+    "/v3/on_page/lighthouse/task_get/json/{id}",
+    "/v3/serp/id_list"
   ]
 }
