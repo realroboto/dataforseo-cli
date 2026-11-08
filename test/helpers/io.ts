@@ -12,9 +12,9 @@ export async function dfs(argv: string[], io: Partial<Io> = {}, { specCheck = fa
   let stdout = '';
   let stderr = '';
   const env = io.env ?? { DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-run-')) };
-  const state = env.DFS_CONFIG_DIR && join(env.DFS_CONFIG_DIR, 'spec-check.json');
-  if (!specCheck && state && existsSync(env.DFS_CONFIG_DIR as string)) {
-    writeFileSync(state, JSON.stringify({ checked: (io.now ?? NOW)() }));
+  const dir = env.DFS_CONFIG_DIR;
+  if (!specCheck && dir && existsSync(dir)) {
+    writeFileSync(join(dir, 'spec-check.json'), JSON.stringify({ checked: (io.now ?? NOW)() }));
   }
   const code = await run(argv, {
     fetch: () => Promise.reject(new Error('unexpected network call')),

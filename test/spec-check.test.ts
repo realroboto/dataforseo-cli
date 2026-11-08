@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -95,9 +95,9 @@ test('a new SHA: raw fetch by SHA, check, atomic cache; --version shows the cach
   );
 });
 
-test('a cache older than the snapshot is not used', async () => {
+test('a commit older than the spec in use is nothing new: no raw fetch, no cache', async () => {
   const env = { DFS_CONFIG_DIR: dir() };
-  const { fetch } = fakeFetch((url) =>
+  const { fetch, calls } = fakeFetch((url) =>
     url === COMMITS
       ? new Response(
           JSON.stringify([
@@ -106,9 +106,13 @@ test('a cache older than the snapshot is not used', async () => {
         )
       : new Response(newSpec()),
   );
-  await dfs(['--help'], { env, fetch }, { specCheck: true });
-  const v = await dfs(['--version'], { env });
-  assert.match(v.stdout, /\(spec 55a4ed0, 2026-10-26\)/);
+  const r = await dfs(['--help'], { env, fetch }, { specCheck: true });
+  assert.equal(r.stderr, '');
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [COMMITS],
+  );
+  assert.equal(existsSync(join(env.DFS_CONFIG_DIR, 'spec.json')), false);
 });
 
 const failures: [string, (url: string) => Response | Promise<Response>, RegExp][] = [
@@ -142,6 +146,48 @@ const failures: [string, (url: string) => Response | Promise<Response>, RegExp][
             }),
           ),
     /path count fell from 565 to 466/,
+  ],
+  [
+    'a query parameter',
+    (url) =>
+      url === COMMITS
+        ? commits(NEW_SHA, '"e4"')
+        : new Response(
+            newSpec((s) => {
+              s.paths['/v3/appendix/new_thing'] = {
+                get: { parameters: [{ name: 'q', in: 'query' }] },
+              };
+            }),
+          ),
+    /new_thing: a parameter not in the path/,
+  ],
+  [
+    'a POST body that is not an array',
+    (url) =>
+      url === COMMITS
+        ? commits(NEW_SHA, '"e4"')
+        : new Response(
+            newSpec((s) => {
+              s.paths['/v3/appendix/new_thing'] = {
+                post: {
+                  requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
+                },
+              };
+            }),
+          ),
+    /new_thing: POST body is not an array of tasks/,
+  ],
+  [
+    'a command word clash',
+    (url) =>
+      url === COMMITS
+        ? commits(NEW_SHA, '"e4"')
+        : new Response(
+            newSpec((s) => {
+              s.paths['/v3/store/list'] = s.paths['/v3/appendix/status'];
+            }),
+          ),
+    /store\/list: a command word clashes with a dfs command/,
   ],
   [
     'not YAML',
@@ -183,7 +229,7 @@ for (const [name, respond, reason] of failures) {
       [COMMITS],
     );
     assert.equal(header(retry.calls[0].init, 'if-none-match'), null);
-    assert.ok(calls.length >= 1);
+    assert.ok(calls.some((c) => c.url === COMMITS));
   });
 }
 
@@ -194,4 +240,53 @@ test('--version and store commands never check the spec', async () => {
     assert.equal(r.code, 0);
     assert.equal(r.stderr, '');
   }
+});
+
+test('a failed check after a cache swap keeps the cache and the old ETag', async () => {
+  const env = { DFS_CONFIG_DIR: dir() };
+  const cache = join(env.DFS_CONFIG_DIR, 'spec.json');
+  const ok = fakeFetch((url) =>
+    url === COMMITS ? commits(NEW_SHA, '"e1"') : new Response(newSpec()),
+  );
+  await dfs(['--help'], { env, fetch: ok.fetch }, { specCheck: true });
+  const before = readFileSync(cache, 'utf8');
+
+  // A newer SHA whose raw fetch fails: one warning naming the cached spec; cache untouched.
+  const newer = 'fff1234def5678901234567890123456789abcde';
+  const bad = fakeFetch((url) =>
+    url === COMMITS
+      ? new Response(
+          JSON.stringify([{ sha: newer, commit: { committer: { date: '2026-11-06T08:00:00Z' } } }]),
+          { headers: { etag: '"e2"' } },
+        )
+      : new Response('', { status: 502 }),
+  );
+  const r = await dfs(
+    ['--help'],
+    { env, fetch: bad.fetch, now: at(T0 + 25 * HOUR) },
+    { specCheck: true },
+  );
+  assert.equal(header(bad.calls[0].init, 'if-none-match'), '"e1"');
+  assert.match(r.stderr, /^dfs: warning: spec check failed, keeping spec abc1234: .*HTTP 502/);
+  assert.equal(readFileSync(cache, 'utf8'), before);
+
+  // The retry still sends the ETag of the last good answer, so it sees the new SHA again.
+  const retry = fakeFetch(() => new Response(null, { status: 304 }));
+  await dfs(
+    ['--help'],
+    { env, fetch: retry.fetch, now: at(T0 + 26.5 * HOUR) },
+    { specCheck: true },
+  );
+  assert.equal(header(retry.calls[0].init, 'if-none-match'), '"e1"');
+});
+
+test('a state file with a bad ETag type sends no If-None-Match', async () => {
+  const env = { DFS_CONFIG_DIR: dir() };
+  writeFileSync(
+    join(env.DFS_CONFIG_DIR, 'spec-check.json'),
+    JSON.stringify({ checked: T0 - 25 * HOUR, etag: 42 }),
+  );
+  const f = fakeFetch(() => commits(SNAPSHOT_SHA, '"e1"'));
+  await dfs(['--help'], { env, fetch: f.fetch }, { specCheck: true });
+  assert.equal(header(f.calls[0].init, 'if-none-match'), null);
 });

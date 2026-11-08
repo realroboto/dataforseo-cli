@@ -1,13 +1,14 @@
 // Catalog: the spec as a command tree (docs/spec/modules/catalog.md). Opens the newest spec,
 // cache or committed Spec snapshot, with the vendor overlay; the daily check swaps the cache.
 import { randomUUID } from 'node:crypto';
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
 import pkg from '../package.json' with { type: 'json' };
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { applyOverlay } from './overlay.ts';
+import type { Io } from './run.ts';
 import type { Schema, Schemas } from './schema.ts';
 import { configDir, privateDir } from './store.ts';
 
@@ -164,7 +165,9 @@ export function newestCommit(commits: unknown): { sha: string; date: string } {
   const sha = isRecord(last) ? last.sha : undefined;
   const date = isRecord(commit) ? commit.date : undefined;
   if (typeof sha !== 'string' || typeof date !== 'string') {
-    throw new Error(`GitHub commits API: no commit for ${FILE}`);
+    throw new Error(
+      `GitHub commits API: no commit for ${FILE}: ${JSON.stringify(commits).slice(0, 200)}`,
+    );
   }
   return { sha, date };
 }
@@ -180,10 +183,16 @@ const readJson = (file: string): unknown => {
   }
 };
 
+// File 600 in the private config dir (700), swapped in by rename.
 function writeAtomic(file: string, text: string): void {
+  privateDir(dirname(file));
   const tmp = `${file}.${randomUUID()}.tmp`;
-  writeFileSync(tmp, text, { mode: 0o600, flag: 'wx', flush: true });
-  renameSync(tmp, file);
+  try {
+    writeFileSync(tmp, text, { mode: 0o600, flag: 'wx', flush: true });
+    renameSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 // The newest spec dfs has: the cache when its commit date is newer than the snapshot's.
@@ -205,15 +214,15 @@ export function readNewest(env?: NodeJS.ProcessEnv): Snapshot {
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 type CheckState = { checked: number; etag?: string; failed?: boolean };
-type CheckIo = {
-  env: NodeJS.ProcessEnv;
-  fetch: (url: string, init?: RequestInit) => Promise<Response>;
-  stderr: { write(chunk: string): unknown };
-  now?: () => number;
-};
+type CheckIo = Pick<Io, 'env' | 'fetch' | 'stderr' | 'now'>;
+// A hung GitHub must not hold the command: the raw spec is a few MB.
+const TIMEOUT_MS = 30_000;
 
 async function get(io: CheckIo, url: string, headers: Record<string, string>) {
-  const res = await io.fetch(url, { headers: { 'user-agent': `dfs/${pkg.version}`, ...headers } });
+  const res = await io.fetch(url, {
+    headers: { 'user-agent': `dfs/${pkg.version}`, ...headers },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
   if (!res.ok && res.status !== 304) throw new Error(`${url}: HTTP ${res.status}`);
   return res;
 }
@@ -225,7 +234,13 @@ export async function dailyCheck(io: CheckIo): Promise<void> {
   const now = (io.now ?? Date.now)();
   const raw = readJson(stateFile(io.env));
   const state: CheckState | undefined =
-    isRecord(raw) && typeof raw.checked === 'number' ? (raw as CheckState) : undefined;
+    isRecord(raw) && typeof raw.checked === 'number'
+      ? {
+          checked: raw.checked,
+          etag: typeof raw.etag === 'string' ? raw.etag : undefined,
+          failed: raw.failed === true,
+        }
+      : undefined;
   const age = state ? now - state.checked : -1; // a future time (clock skew) counts as due
   if (state && age >= 0 && age < (state.failed ? HOUR_MS : DAY_MS)) return;
   const current = readNewest(io.env);
@@ -238,7 +253,8 @@ export async function dailyCheck(io: CheckIo): Promise<void> {
     const etag = res.headers.get('etag') ?? undefined;
     if (res.status !== 304) {
       const { sha, date } = newestCommit(await res.json());
-      if (sha !== current.sha) {
+      // Only a commit newer than the spec in use; the same SHA or an older one is nothing new.
+      if (sha !== current.sha && Date.parse(date) > Date.parse(current.date)) {
         const spec: unknown = parse(await (await get(io, rawUrl(sha), {})).text());
         const overlaid = structuredClone(spec);
         applyOverlay(overlaid, readOverlay());
@@ -249,7 +265,6 @@ export async function dailyCheck(io: CheckIo): Promise<void> {
             `spec ${sha.slice(0, 7)} fails the structural check: ${problems[0]}${more}`,
           );
         }
-        privateDir(configDir(io.env));
         writeAtomic(cacheFile(io.env), JSON.stringify({ sha, date, spec }));
       }
     }
@@ -262,7 +277,6 @@ export async function dailyCheck(io: CheckIo): Promise<void> {
     next = { checked: now, etag: state?.etag, failed: true };
   }
   try {
-    privateDir(configDir(io.env));
     writeAtomic(stateFile(io.env), JSON.stringify(next));
   } catch (e) {
     io.stderr.write(`dfs: warning: cannot save the spec check time: ${messageOf(e)}\n`);
