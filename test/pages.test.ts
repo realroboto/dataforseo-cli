@@ -19,7 +19,7 @@ const item = (task: number, result: number) => {
   ];
   return { priority_low: l, priority_normal: l, priority_high: l };
 };
-const PRICE = {
+const PRICE: Record<string, unknown> = {
   dataforseo_labs: { keyword_ideas: { live: item(0.012, 0.00012) } },
   backlinks: { backlinks: { live: item(0.024, 0.000036) } },
 };
@@ -59,10 +59,10 @@ const page = (n: number, from: number, total: number, token: string, cost: numbe
 });
 
 // A fake API over `total` results: answers by offset or by token, records each page body.
-function api(total: number, token: string, cost: number, space?: number) {
+function api(total: number, token: string, cost: number, space?: number, user = USER_DATA) {
   const bodies: Record<string, unknown>[] = [];
   const f = fakeFetch((url, init) => {
-    if (url.endsWith('/v3/appendix/user_data')) return json(USER_DATA);
+    if (url.endsWith('/v3/appendix/user_data')) return json(user);
     const [task] = JSON.parse(String(init?.body));
     bodies.push(task);
     const limit = Number(task.limit);
@@ -146,6 +146,45 @@ test('--page-all: stops before the page that passes the ceiling; paid pages kept
   const all = rows(e, '/v3/dataforseo_labs/google/keyword_ideas/live');
   assert.equal(all.filter((x) => x.reused_from !== null).length, 2);
   assert.equal(a.bodies.length, 5); // pages 3, 4, 5 sent; page 6 would pass $0.396
+});
+
+test('--page-all: an unknown price under an explicit --max-cost stops once the real cost reaches it', async () => {
+  const user = structuredClone(USER_DATA);
+  user.tasks[0].result[0].price = { dataforseo_labs: PRICE.dataforseo_labs }; // no backlinks node
+  const a = api(20_000, 'search_after_token', 0.0246, undefined, user);
+  const task = { target: 'example.com', limit: 10 };
+  const r = await dfs(
+    [
+      'backlinks',
+      'backlinks',
+      'live',
+      '--body',
+      JSON.stringify(task),
+      '--page-all',
+      '--max-cost',
+      '0.05',
+    ],
+    { env: env(), fetch: a.fetch },
+  );
+  assert.equal(r.code, 4, r.stderr);
+  assert.equal(a.bodies.length, 3); // $0.0492 after two pages is below $0.05, so page 3 goes
+  assert.match(
+    r.stderr,
+    /dfs: --page-all stopped before page 4: cost so far \$0.0738 \+ page estimate \$\? above ceiling \$0.05; pages 1-3 saved — rerun: dfs backlinks backlinks live --body '\{.*\}' --page-all --max-cost 0.1238\n$/,
+  );
+});
+
+test('--page-all: a long body is not repeated in the rerun line; output stays within budget', async () => {
+  const e = env();
+  const a = api(12_000, 'offset_token', 0.132);
+  const keywords = Array.from({ length: 200 }, (_, i) => `keyword number ${i}`);
+  const r = await dfs(
+    [...IDEAS, '--body', JSON.stringify({ ...TASK, keywords }), '--page-all', '--max-cost', '0.2'],
+    { env: e, fetch: a.fetch },
+  );
+  assert.equal(r.code, 4, r.stderr);
+  assert.match(r.stderr, /--body <the same --body> --page-all --max-cost 0.264\n$/);
+  assert.ok(r.stdout.length + r.stderr.length <= 9000);
 });
 
 test('--page-all --full: one line per page, each the exact response', async () => {

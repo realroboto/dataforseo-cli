@@ -24,6 +24,7 @@ export function pagingOf(catalog: Catalog, ep: Endpoint, tasks: unknown[] | unde
 
 const usd = (n: number) => Math.round(n * 1e6) / 1e6;
 const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
+const LONG_BODY = 1000; // characters of --body the rerun line repeats
 const CUT_MAX = 100; // longest cut line: 5-digit counts, `r_` + 10 hex
 
 export async function pageAll(
@@ -39,19 +40,21 @@ export async function pageAll(
   const free = sandbox || isFree(ep.path);
   const rule = free ? undefined : ruleFor(ep.path);
   // Rerun of a stop: same task and flags, a higher ceiling; pages already saved reuse at $0.
-  const body = flags.body === '-' ? JSON.stringify(task) : (flags.body ?? '');
+  // A long body would crowd out the output budget: the rerun then names it only.
+  const arg = flags.body?.startsWith('@') ? flags.body : JSON.stringify(task);
+  const body = arg.length > LONG_BODY ? '<the same --body>' : quote(arg);
   const rerun = (need: number) =>
     [
       command(ep.words),
-      `--body ${quote(body)} --page-all`,
+      `--body ${body} --page-all`,
       flags.full && '--full',
       flags['no-validate'] && '--no-validate',
       `--max-cost ${need}`,
     ]
       .filter(Boolean)
       .join(' ');
-  const stopLine = (page: number, spent: number, est: number, need: number) =>
-    `dfs: --page-all stopped before page ${page}: cost so far $${spent} + page estimate $${est} above ceiling $${ceiling}; pages 1-${page - 1} saved — rerun: ${rerun(need)}\n`;
+  const stopLine = (page: number, spent: number, est: number | null, need: number) =>
+    `dfs: --page-all stopped before page ${page}: cost so far $${spent} + page estimate $${est ?? '?'} above ceiling $${ceiling}; pages 1-${page - 1} saved — rerun: ${rerun(need)}\n`;
   const moreLine = (n: number) => `dfs: +${n} more lines — all pages: dfs store list\n`;
   // Room kept for the closing lines, so the whole output stays within the budget.
   const big = 99_999.999999;
@@ -100,10 +103,14 @@ export async function pageAll(
         : estimate(rule, planned.body ?? [], price?.tree, (io.now ?? Date.now)());
       if (est.warning) warn(est.warning);
       const total = est.usd === null ? est : { ...est, usd: usd(spent + est.usd) };
-      const refusal = free ? undefined : guard(ep.path, total, ceiling, explicit);
+      // An unknown price sent under an explicit --max-cost: the real cost so far still stops.
+      const unknownOver = est.usd === null && page > 1 && spent >= ceiling;
+      const refusal = free
+        ? undefined
+        : (guard(ep.path, total, ceiling, explicit) ?? (unknownOver ? 'over' : undefined));
       if (refusal && page === 1) throw new DfsError(4, refusal);
       if (refusal) {
-        return close(4, stopLine(page, usd(spent), est.usd ?? 0, total.usd ?? 0));
+        return close(4, stopLine(page, usd(spent), est.usd, total.usd ?? usd(spent + ceiling)));
       }
       const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io);
       sent.lines.forEach(say);
