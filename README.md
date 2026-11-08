@@ -5,7 +5,7 @@
 - Package manager: pnpm. Node runs `.ts` directly; tests `node --test` ([stack](docs/spec/distribution-stack.md)).
 - Checks: `pnpm typecheck && pnpm lint && pnpm test`; then `pnpm build && pnpm pack:check`. `pnpm spec:snapshot` (network) rewrites `spec/snapshot.json`; never edit it by hand. `pnpm spec:check` (network) = drift check, not part of Checks. `pnpm test:sandbox`, `pnpm fixtures:record`: Mac only, DataForSEO login, sandbox ($0). Release: runbook in [workflows-release.md](docs/spec/workflows-release.md).
 - Spec: [docs/spec/index.md](docs/spec/index.md). Start with [overview](docs/spec/overview.md).
-- Docs bundle (OKF 0.2): [docs/index.md](docs/index.md).
+- Docs bundle (OKF 0.2): [docs/index.md](docs/index.md). Decisions: [ADR index](docs/adr/index.md).
 
 ## Agent skills
 
