@@ -25,6 +25,8 @@ Stubbed-`fetch` tests miss transport faults: open-seo's gzip regression passed t
 
 Real wire behaviour checked before each release, at $0, with no secret outside the owner's machine.
 
+Open (2026-11-08): run red on 13 time-bound vendor examples plus one `language_code` fault; owner decision in #26.
+
 ## Source
 
 [Testing decisions](/spec/testing.md) (Seam 3, fixtures, CI rule); [Workflows](/spec/workflows-release.md) (Release scope, runbook step 3).

@@ -8,3 +8,5 @@
 - [0006 Sandbox contract test on the Mac only](/adr/0006-sandbox-contract-test-mac-only.md) - Real sandbox HTTP before release; login never on GitHub.
 - [0007 Staged publish](/adr/0007-staged-publish.md) - OIDC `npm stage publish`; owner approves each version.
 - [0008 Vendor overlay + strict validation](/adr/0008-vendor-overlay-strict-validation.md) - Overlay 1.0 fixes vendor faults; `--no-validate` opt-in.
+
+Citations `NN:L`, `rNN:L` point into owner planning map: key in [spec overview](/spec/overview.md) (Citation key).
