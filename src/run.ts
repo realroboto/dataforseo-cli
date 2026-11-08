@@ -107,10 +107,14 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
     'no-validate': { type: 'boolean' },
     fresh: { type: 'boolean' },
     wait: { type: 'string' },
+    'page-all': { type: 'boolean' },
   });
   if (positionals.length === 0) {
     io.stdout.write(rootHelp(catalog.root, catalog));
     return;
+  }
+  if (values['page-all'] && positionals.some((w) => w === '+run' || w === '+collect')) {
+    throw new DfsError(3, '--page-all applies to endpoint calls only, not +run or +collect');
   }
   if (positionals.includes('+collect')) {
     if (values.help) {
