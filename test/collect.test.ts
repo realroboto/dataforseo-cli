@@ -156,6 +156,21 @@ const idListBodies = (calls: { url: string; init?: RequestInit }[], module: stri
     .filter((c) => c.url.endsWith(`/v3/${module}/id_list`))
     .map((c) => JSON.parse(c.init?.body as string)[0]);
 
+test('a plain task_post call writes pending task rows; +collect takes advanced, then regular', async () => {
+  const e = env();
+  const { fetch, calls } = api();
+  const words = ['serp', 'google', 'organic', 'task_post', '--body', '{"keyword":"k"}'];
+  assert.equal((await dfs(words, { env: e, fetch, now })).code, 0);
+  assert.deepEqual(
+    query(e, 'SELECT id, state, variant, cost FROM task').map((r) => ({ ...r })),
+    [{ id: 't1', state: 'pending', variant: null, cost: 0.0006 }],
+  );
+  const n = calls.length;
+  assert.equal((await dfs(['serp', '+collect'], { env: e, fetch, now })).code, 0);
+  assert.ok(paths(calls.slice(n)).includes('/v3/serp/google/organic/task_get/advanced/t1'));
+  assert.equal(query(e, 'SELECT state FROM task')[0].state, 'collected');
+});
+
 test('lost ids map to the longest level of their url; first pass starts at Store creation', async () => {
   const e = env();
   const { fetch, calls } = api({

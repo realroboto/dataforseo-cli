@@ -235,10 +235,15 @@ export async function runTasks(
     const ids = tasksOf(x.parsed).flatMap((t) =>
       (Array.isArray(t.result) ? t.result : []).flatMap((r) => (isRecord(r) ? [r.id] : [])),
     );
-    const mine = ids.flatMap((id) => {
-      const t = typeof id === 'string' ? tasks.get(id) : undefined;
-      return t?.state === 'pending' ? [t] : [];
-    });
+    // The last poll also asks for own ids not listed: tasks_ready lists at most 1000 tasks and
+    // never a postback_url task (vendor docs).
+    const mine =
+      now() >= deadline
+        ? pending()
+        : ids.flatMap((id) => {
+            const t = typeof id === 'string' ? tasks.get(id) : undefined;
+            return t?.state === 'pending' ? [t] : [];
+          });
     // In parallel: Transport caps the requests in flight.
     await Promise.all(
       mine.map(async (t) => tasks.set(t.id, await collectTask(catalog, t, io, warn, messages))),
@@ -287,7 +292,9 @@ async function collectTask(
   messages: Map<string, string>,
 ): Promise<Task> {
   const level = collectLevel(catalog, t.path);
-  const ep = level && collectPaths(level).get(t.variant ?? '');
+  // No stored variant (a plain task_post call): the variant a recovered id takes.
+  const variant = t.variant ?? (level && recoveredVariant(level, false)) ?? '';
+  const ep = level && collectPaths(level).get(variant);
   if (!ep) {
     warn(`task ${t.id}: no collect call for ${t.path} ${t.variant ?? ''}`.trimEnd());
     return t;

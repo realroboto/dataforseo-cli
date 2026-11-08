@@ -89,7 +89,7 @@ const many = (n: number, task: unknown) => Array.from({ length: n }, () => task)
 const dry = (words: string[], body: unknown, ...flags: string[]) =>
   dfs([...words, '--body', JSON.stringify(body), '--dry-run', ...flags]);
 
-test('limits: 100 tasks per POST, 1 on live, 20 on instant_pages; exit 3 with nothing sent', async () => {
+test('limits: 100 tasks per POST, 1 on live, 20 on instant_pages (5 per domain); exit 3 with nothing sent', async () => {
   const post = ['serp', 'google', 'organic', 'task_post'];
   assert.equal((await dry(post, many(100, { keyword: 'a' }))).code, 0);
   const over = await send(post, many(101, { keyword: 'a' }));
@@ -103,12 +103,26 @@ test('limits: 100 tasks per POST, 1 on live, 20 on instant_pages; exit 3 with no
   assert.match(live.stderr, /2 tasks, at most 1/);
 
   const instant = ['on_page', 'instant_pages'];
-  const page = { url: 'https://example.com/' };
-  assert.equal((await dry(instant, many(20, page))).code, 0);
-  const r = await send(instant, many(21, page));
+  const pages = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ url: `https://www.example${i % 4}.com/${i}` }));
+  assert.equal((await dry(instant, pages(20))).code, 0);
+  const r = await send(instant, pages(21));
   assert.equal(r.code, 3);
   assert.equal(r.calls.length, 0);
   assert.match(r.stderr, /21 tasks, at most 20/);
+  // Vendor docs: at most 5 identical domains in one request.
+  const six = await send(instant, many(6, { url: 'https://example.com/' }));
+  assert.equal(six.code, 3);
+  assert.equal(six.calls.length, 0);
+  assert.match(six.stderr, /6 tasks on example\.com, at most 5/);
+
+  // content_parsing/live docs: "each Live API call can contain only one task".
+  const parse = await send(
+    ['on_page', 'content_parsing', 'live'],
+    many(2, { url: 'https://example.com/' }),
+  );
+  assert.equal(parse.code, 3);
+  assert.match(parse.stderr, /2 tasks, at most 1/);
 });
 
 test('filters: 9 top-level conditions exit 3 on an "8 filters maximum" field only', async () => {

@@ -427,9 +427,10 @@ export async function sendPlanned(
       `dfs: warning: real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
     );
   }
-  // A call that charges at once (Live and the other paid paths that are not task_post) is
-  // collected at once: its tasks get rows now, for `store spend` (store.md, `task`).
-  if (!isFree(ep.path) && !ep.path.endsWith('/task_post')) {
+  // Paid tasks get rows now, for `store spend` and `dfs +collect` (store.md, `task`): a task_post
+  // task is pending, any other paid call is collected at once.
+  if (!isFree(ep.path)) {
+    const taskPost = ep.path.endsWith('/task_post');
     const now = new Date((io.now ?? Date.now)()).toISOString();
     const tasks = isRecord(parsed) && Array.isArray(parsed.tasks) ? parsed.tasks : [];
     const rows: Task[] = tasks.filter(isRecord).flatMap((t) =>
@@ -440,13 +441,13 @@ export async function sendPlanned(
               post_response: id,
               path: ep.path,
               variant: null,
-              state: isOk(t.status_code) ? 'collected' : 'failed',
+              state: !isOk(t.status_code) ? 'failed' : taskPost ? 'pending' : 'collected',
               status_code: typeof t.status_code === 'number' ? t.status_code : null,
               cost: typeof t.cost === 'number' ? t.cost : null,
               tag: isRecord(t.data) && typeof t.data.tag === 'string' ? t.data.tag : null,
               posted_at: now,
-              collected_at: now,
-              collect_response: id,
+              collected_at: taskPost ? null : now,
+              collect_response: taskPost ? null : id,
               sandbox: opts.sandbox ? 1 : 0,
             },
           ]
