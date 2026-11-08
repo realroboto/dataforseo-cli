@@ -48,7 +48,7 @@ status: stable
 - Whether Live results are kept 30 days: sources conflict (r31:169).
 - Charging of 40103, 5xxxx and a dropped Live connection is unverified (r31:115–116). Retry rules assume the worst.
 - Price rules are hand data for about 270 paid paths. The drift check covers paths, not prices; the daily price-tree check covers node names; the real-cost warning covers amounts.
-- `tasks_ready` hides ids past the first 1,000 uncollected in its scope (r31:124). With 1,000 or more uncollected tasks of other runs, `+run` may not see its own ids and exits 6 at timeout; no money is lost, and `dfs +collect` collects them by direct collect calls.
+- `tasks_ready` hides ids past the first 1,000 uncollected in its scope (r31:124). Also never lists a `postback_url` task. Mitigation (2026-11-08): the last `+run` poll sends a direct collect call for each own task still pending, so `+run` sees its own ids within `--wait`.
 - `spec.yml` re-enables itself with `GITHUB_TOKEN`. GitHub sends scheduled-workflow notifications to the user who re-enabled a disabled workflow (r23:62); whether an enable call on an enabled workflow counts is unverified. If it counts, failure emails go to the bot, not the owner. Owner setup checklist 7 checks it once.
 - `task.cost` never takes a later 0 (Store). If DataForSEO reports a full refund as 0 (r31:114, r31:60), spend is overstated, never understated.
 - The 1,000-character margin under the 10,000 window is an estimate; the docs say "roughly 10,000". A failed command keeps head and tail, so the cut line survives.
