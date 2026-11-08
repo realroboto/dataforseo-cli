@@ -239,7 +239,8 @@ test("another run's ready id in tasks_ready is neither fetched nor printed", asy
 
 test('polls tasks_ready at 5 s doubling to 30 s; timeout exits 6 with the pending ids', async () => {
   const e = env();
-  const { fetch, calls } = api({ ready: () => [] });
+  const queued = { status_code: 40602, status_message: 'Task In Queue.' };
+  const { fetch, calls } = api({ ready: () => [], get: () => queued });
   const c = clock();
   const r = await dfs([...ORGANIC, '--body', bodyOf(1)], { env: e, fetch, ...c });
   assert.equal(r.code, 6, r.stderr);
@@ -247,8 +248,24 @@ test('polls tasks_ready at 5 s doubling to 30 s; timeout exits 6 with the pendin
   assert.equal(paths(calls).filter((p) => p.endsWith('/tasks_ready')).length, 5);
   assert.match(
     r.stderr,
-    /dfs: task t1 pending 20100\ndfs: 6 1 tasks pending after 90 s — collect them later: dfs \+collect\n$/,
+    /dfs: task t1 pending 40602\ndfs: 6 1 tasks pending after 90 s — collect them later: dfs \+collect\n$/,
   );
+});
+
+// tasks_ready lists at most 1000 tasks and never a postback_url task (vendor docs).
+test('the last poll collects own pending ids that tasks_ready did not list', async () => {
+  const e = env();
+  const { fetch, calls } = api({ ready: () => [] });
+  const r = await dfs([...ORGANIC, '--body', bodyOf(1), '--wait', '5'], {
+    env: e,
+    fetch,
+    ...clock(),
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(paths(calls).slice(1), [
+    '/v3/serp/google/organic/tasks_ready',
+    '/v3/serp/google/organic/task_get/advanced/t1',
+  ]);
 });
 
 test('on_page collects through summary/{id} and stays pending until crawl_progress is finished', async () => {

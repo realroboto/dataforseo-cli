@@ -8,11 +8,14 @@ import { deref, type Fault, faults, fields, type Schema, type Schemas } from './
 const SANDBOX = 'https://sandbox.dataforseo.com';
 const SHOWN = 10; // faults named in one message; the rest are counted
 // Limits table: these paths take 20 tasks, by path, not by the word `live` (r31:154).
+// content_parsing/live is Live, 1 task: "each Live API call can contain only one task" (its docs).
 export const TWENTY_TASK_PATHS = new Set([
   '/v3/on_page/instant_pages',
-  '/v3/on_page/content_parsing/live',
   '/v3/on_page/page_screenshot',
 ]);
+// instant_pages docs: the URLs of one request "cannot contain more than 5 identical domains".
+const SAME_DOMAIN_PATH = '/v3/on_page/instant_pages';
+const SAME_DOMAIN_MAX = 5;
 const maxTasks = (path: string): number =>
   TWENTY_TASK_PATHS.has(path) ? 20 : isLive(path) ? 1 : 100;
 const MAX_FILTERS = 8;
@@ -80,6 +83,21 @@ export function plan(
       3,
       `${tasks.length} tasks, at most ${max} on ${ep.path} — split the tasks over several calls`,
     );
+  }
+  if (ep.path === SAME_DOMAIN_PATH) {
+    const hosts = new Map<string, number>();
+    for (const t of tasks ?? []) {
+      const host =
+        isRecord(t) && typeof t.url === 'string' ? URL.parse(t.url)?.hostname : undefined;
+      if (host) hosts.set(host, (hosts.get(host) ?? 0) + 1);
+    }
+    const [host, n] = [...hosts].find(([, c]) => c > SAME_DOMAIN_MAX) ?? [];
+    if (host) {
+      throw new DfsError(
+        3,
+        `${n} tasks on ${host}, at most ${SAME_DOMAIN_MAX} per call on ${ep.path} — split the tasks over several calls`,
+      );
+    }
   }
   const items = ep.op.requestBody?.content?.['application/json']?.schema?.items;
   const schemas = catalog.spec.components.schemas;

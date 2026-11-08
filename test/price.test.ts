@@ -462,6 +462,15 @@ test('depth multipliers: non-organic pages bill full price, organic later pages 
   assert.equal(await usd(e, 'serp google maps task_post', { ...pizza, depth: 250 }), 0.0018);
   // help-center/using-the-stop_crawl_on_match-parameter-in-serp-api: Bing Live depth 100 = $0.0155.
   assert.equal(await usd(e, 'serp bing organic live advanced', { ...pizza, depth: 100 }), 0.0155);
+  // search_by_image has no depth: max_crawl_pages counts the billed pages.
+  assert.equal(
+    await usd(e, 'serp google search_by_image task_post', {
+      ...US,
+      image_url: 'https://example.com/a.png',
+      max_crawl_pages: 3,
+    }),
+    0.0018,
+  );
   const video = { ...US, video_id: 'dQw4w9WgXcQ' };
   assert.equal(
     await usd(e, 'serp youtube video_comments live advanced', { ...video, depth: 40 }),

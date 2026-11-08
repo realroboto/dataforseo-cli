@@ -167,7 +167,11 @@ const SERP_RULES: Rule[] = [
   // https://dataforseo.com/pricing/google-serp/google-news-serp-api
   ...serp('google/news', ['advanced', 'html'], { pages: full(10), extras: [OPERATORS, RECT_ADD] }),
   // https://dataforseo.com/pricing/google-serp/google-search-by-image-serp-api
-  ...serp('google/search_by_image', [], { extras: [RECT_DOUBLE] }),
+  // No depth field: each crawled page (100 results) bills, so max_crawl_pages counts the pages.
+  ...serp('google/search_by_image', [], {
+    pages: full(1, 'max_crawl_pages'),
+    extras: [RECT_DOUBLE],
+  }),
   // https://dataforseo.com/pricing/google-serp/google-ads-advertisers-serp-api
   ...serp('google/ads_advertisers', []),
   // https://dataforseo.com/pricing/google-serp/google-ads-search-serp-api
