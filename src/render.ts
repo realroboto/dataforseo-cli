@@ -2,6 +2,7 @@
 // (docs/spec/modules/render.md). Spec descriptions are HTML: shown as plain text.
 import { concretePath, type Endpoint, hasRun, type Level, type Spec } from './catalog.ts';
 import { isRecord } from './json.ts';
+import { paging } from './planner.ts';
 import { deref, fields, isNullable, type Schema, type Schemas } from './schema.ts';
 
 export const SCHEMA_USAGE = 'dfs schema <words…>';
@@ -48,6 +49,8 @@ call flags:
   --dry-run               validate, print the call plan as JSON; nothing sent, no credentials
   --no-validate           field name, type and filter faults warn instead of exit 3
   --fresh                 send even when a stored response is reusable
+  --page-all              one task, all pages: offset to 10,000, then offset_token or search_after_token;
+                          stops before the page that passes the ceiling (exit 4); --full: one line per page
   --wait <s>              +run: wait for tasks up to <s> seconds (default 90; 0 = post only)
   credentials: DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD from the environment
   cost guard: exit 4, nothing sent, when the estimate passes the ceiling or the price is unknown
@@ -90,7 +93,7 @@ export function nodeHelp(node: Level, params: Record<string, string>, spec: Spec
     if (ep.method === 'post') lines.push('', `request fields: dfs schema ${ep.words.join(' ')}`);
     lines.push(
       '',
-      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>] [--fresh] [--dry-run] [--no-validate]`,
+      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>] [--fresh]${paging(ep, spec.components.schemas) ? ' [--page-all]' : ''} [--dry-run] [--no-validate]`,
     );
   }
   const children = [...node.children].toSorted(([a], [b]) => a.localeCompare(b));

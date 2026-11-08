@@ -8,6 +8,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { type Catalog, type Endpoint, isLive } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
+import { pageAll, pagingOf } from './pages.ts';
 import { type Plan, plan } from './planner.ts';
 import { type Estimate, estimate, guard, isFree, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
@@ -45,6 +46,7 @@ export type CallFlags = {
   'dry-run'?: boolean;
   'no-validate'?: boolean;
   fresh?: boolean; // send even when a stored response is reusable
+  'page-all'?: boolean; // follow offset, then the token, over all pages (src/pages.ts)
 };
 
 // The tasks to send: a JSON object is one task, an array is the batch.
@@ -323,6 +325,11 @@ export async function call(
   io: Io,
 ): Promise<number> {
   const tasks = await readBody(ep, flags.body, io);
+  // --dry-run plans the first page only.
+  if (flags['page-all']) {
+    const paging = pagingOf(catalog, ep, tasks);
+    if (!flags['dry-run']) return pageAll(catalog, ep, params, paging, flags, io);
+  }
   const sandbox = flags.sandbox === true;
   const { ceiling, explicit } = ceilingOf(flags, io);
   const planned = plan(catalog, ep, params, tasks, { sandbox, validate: !flags['no-validate'] });
@@ -366,12 +373,35 @@ export async function call(
   }
   if (refusal) throw new DfsError(4, refusal);
 
+  const r = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io);
+  const stderr = r.lines.map((l) => `${l}\n`).join('');
+  io.stderr.write(stderr);
+  if (r.parsed !== undefined) {
+    io.stdout.write(
+      flags.full
+        ? `${r.full}\n`
+        : compact(r.parsed, r.id, 1, BUDGET - early.length - stderr.length),
+    );
+  }
+  return r.exit;
+}
+
+// One send of a planned call, saved before print: its stderr lines (status line first), the
+// exit code and the response. An unsaved response prints in full and exits 5.
+export async function sendPlanned(
+  catalog: Catalog,
+  ep: Endpoint,
+  planned: Plan,
+  est: Estimate,
+  opts: { sandbox: boolean; free: boolean },
+  io: Io,
+) {
   const warnings: string[] = [];
   const { res, parsed, row, saved } = await exchange(
     catalog,
     ep,
     planned,
-    { sandbox, free, estimate: est.usd },
+    { ...opts, estimate: est.usd },
     io,
     (w) => warnings.push(`dfs: warning: ${w}`),
   );
@@ -382,7 +412,7 @@ export async function call(
     throw new DfsError(5, '5 response not saved — stdout is the only copy');
   }
   // Sandbox costs are dummy data (r34:51).
-  if (!sandbox && est.usd !== null && row.cost !== null && row.cost > est.usd) {
+  if (!opts.sandbox && est.usd !== null && row.cost !== null && row.cost > est.usd) {
     warnings.push(
       `dfs: warning: real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
     );
@@ -390,14 +420,7 @@ export async function call(
   const { lines, exit } = outcome(res.status, parsed, id);
   const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;
   const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est.usd ?? '?'} saved=${id}`;
-  const stderr = [status, ...warnings, ...lines].map((l) => `${l}\n`).join('');
-  io.stderr.write(stderr);
-  if (parsed !== undefined) {
-    io.stdout.write(
-      flags.full ? `${full}\n` : compact(parsed, id, 1, BUDGET - early.length - stderr.length),
-    );
-  }
-  return exit;
+  return { parsed, id, full, cost: row.cost, lines: [status, ...warnings, ...lines], exit };
 }
 
 // A stored response at $0: saves a reuse row (no body, no cost), then prints the stored output.

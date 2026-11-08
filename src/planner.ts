@@ -47,6 +47,14 @@ const list = (items: string[]): string =>
   items.slice(0, SHOWN).join('; ') +
   (items.length > SHOWN ? `; +${items.length - SHOWN} more` : '');
 
+// Paged endpoints (--page-all): a POST task with `offset`, plus its token field when it has one.
+const TOKENS = ['offset_token', 'search_after_token'];
+export function paging(ep: Endpoint, schemas: Schemas): { token?: string } | undefined {
+  if (ep.method !== 'post') return undefined;
+  const known = fields(ep.op.requestBody?.content?.['application/json']?.schema?.items, schemas);
+  return known.has('offset') ? { token: TOKENS.find((k) => known.has(k)) } : undefined;
+}
+
 export type Plan = {
   method: string;
   path: string; // concrete path
