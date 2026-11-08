@@ -35,6 +35,6 @@ status: stable
 4. Tag `v<version>` on `main` → `publish.yml` → owner approves the staged version on npm (34:152).
 5. First release only: the owner publishes an empty `0.0.0` by hand (own npm login + 2FA), sets the trusted publisher in the package settings (staged publish allowed), and tags `v0.1.0` within 2 days, before the new config expires (34:151; r34:43–45).
 
-### ADRs to write in the new repo
+### ADRs (written 2026-11-08, #19: [ADR index](/adr/index.md))
 
 From 28:187, 31:210 and 34:171: compact output by default; exit-code table; reuse on by default (a deviation from gapi ADR 0001, 31:121); no retry of a paid request without proof of cost 0; spec source = runtime check + snapshot; sandbox contract test on the Mac only, no DataForSEO login on GitHub; staged publish; vendor spec corrected by an Overlay 1.0 file, strict validation with `--no-validate` opt-in (agent design, Planner).
