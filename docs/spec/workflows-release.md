@@ -22,6 +22,7 @@ status: stable
   5. a `task_post` level has no collect call (agent design, Lifecycle);
   6. the spec has the `id_list` hand path; the drift-fix session removes the hand entry (31:214);
   7. a request field named `filters` or `*_filters` has a typed `items` schema after the overlay. Reason: filter syntax is the one class of vendor type fault found (85 of 85 such fields in spec `55a4ed0`), and only 38 of the 272 examples carry a filter, so fields with no example need this check (check.py `examples`, `request.filter_field_names`).
+- **Check scope (agent design, 2026-11-08, #16).** Code: `scripts/spec-check.ts`, pure `specProblems(spec, overlay)` plus `report()` (job summary), tested by fixtures in `test/spec-drift.test.ts`, no network. Condition 3 "helper" paths = planner 20-task paths and `user_data`; lifecycle paths come from the spec (condition 5 covers them). Condition 4 runs each example through `plan()` (types, names, filter count, task count). A structural fault (1) does not stop conditions 2–7; only a document with no `paths` or `components.schemas` does. `spec.yml` uses GitHub-owned actions only; pnpm from `npm install --global <packageManager>`; re-enable step runs first, forced failure last.
 - `publish.yml`: on tag `v*`. Runs the `prepublishOnly` gate, then `npm stage publish` by OIDC with provenance. The version goes out only after the owner approves it on npm (34:152). Gate order, like gapi: typecheck → lint → test → spec:check → build (r22:27) → pack check (dfs addition).
 
 ### Release runbook
