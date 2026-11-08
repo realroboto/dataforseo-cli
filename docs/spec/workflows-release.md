@@ -32,8 +32,8 @@ status: stable
 1. `pnpm up --latest`; check the newest Node LTS line; tests green (10:21).
 2. `pnpm spec:snapshot`; commit the snapshot when its SHA changed; tests green (Catalog, Snapshot source).
 3. `pnpm test:sandbox` on the Mac (34:131–133, 34:154), with `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` set; commit `spec/sandbox-40404.json` when it changed. A new fixture need: `pnpm fixtures:record`, commit `test/fixtures/`.
-4. Tag `v<version>` on `main` → `publish.yml` → owner approves the staged version on npm (34:152).
-5. First release only: the owner publishes an empty `0.0.0` by hand (own npm login + 2FA), sets the trusted publisher in the package settings (staged publish allowed), and tags `v0.1.0` within 2 days, before the new config expires (34:151; r34:43–45).
+4. Tag `v<version>` on `main` → `publish.yml` → owner approves the staged version on npm (34:152): `npmjs.com/settings/<user>/staged-packages`, **Approve** (enabled after npm automated review), 2FA.
+5. First release only (done 2026-11-08, `v0.1.0`; trusted publisher status Valid): the owner publishes an empty `0.0.0` by hand (own npm login + 2FA), sets the trusted publisher (package page → Settings → Trusted Publisher → GitHub Actions: `realroboto` / `dataforseo-cli` / `publish.yml` / environment `npm`; `npm stage publish` always allowed, leave other actions off), and tags `v0.1.0` within 2 days, before the new config expires (34:151; r34:43–45).
 
 ### ADRs (written 2026-11-08, #19: [ADR index](/adr/index.md))
 
