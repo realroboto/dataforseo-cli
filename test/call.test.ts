@@ -356,6 +356,50 @@ test('exit 0, 1, 2 and 6 follow the exit table; every response is saved', async 
   }
 });
 
+test('combining rule: 2 if any account task, else 1 if all failed, else 6 if any failed or pending, else 0', async () => {
+  const pending = 'Task In Queue.';
+  const cases: [string, unknown[], number][] = [
+    ['account beats every task failed', [task(40501, 'Invalid Field.'), task(40203, 'Limit.')], 2],
+    ['account beats pending', [task(40602, pending), task(40206, 'Limit.')], 2],
+    ['every task failed', [task(40501, 'Invalid Field.'), task(50000, 'Internal Error.')], 1],
+    ['failed and pending', [task(40501, 'Invalid Field.'), task(40601, 'Task Handed.')], 6],
+    ['only pending 40601/40602', [task(40601, 'Task Handed.'), task(40602, pending)], 6],
+    ['20100 on a GET is pending', [task(20000), task(20100, 'Task Created.')], 6],
+    ['ok and warning codes', [task(20000), task(40106, 'Partial.'), task(40007, 'Notice.')], 0],
+    ['unknown 4xxxx task, alone', [task(40999, 'New.')], 1],
+    ['unknown 5xxxx task beside ok', [task(20000), task(59999, 'New.')], 6],
+  ];
+  for (const [name, tasks, exit] of cases) {
+    const { fetch } = fakeFetch(() => json(envelope(20000, 'Ok.', tasks)));
+    const r = await dfs(['appendix', 'user_data'], { env: env(), fetch });
+    assert.equal(r.code, exit, `${name}: ${r.stderr}`);
+  }
+  const { fetch } = fakeFetch(() => json(envelope(20000, 'Ok.', [task(40602, pending)])));
+  const r = await dfs(['appendix', 'user_data'], { env: env(), fetch });
+  assert.match(r.stderr, /^dfs: task \S+ pending 40602$/m);
+  assert.doesNotMatch(r.stderr, / failed /);
+});
+
+test('20100 on a POST is ok (task created), not pending', async () => {
+  const posted = envelope(20000, 'Ok.', [task(20100, 'Task Created.')]);
+  const { fetch } = fakeFetch(() => json(posted));
+  const words = ['serp', 'google', 'organic', 'task_post', '--body', '{"keyword":"pizza"}'];
+  const r = await dfs([...words, '--sandbox'], { env: env(), fetch });
+  assert.equal(r.code, 0, r.stderr);
+});
+
+test('envelope codes not in the exit table exit 1: unknown 4xxxx and 5xxxx', async () => {
+  for (const code of [40999, 41000, 50999, 59999]) {
+    const { fetch } = fakeFetch(() => json(envelope(code, 'New.')));
+    const r = await dfs(['appendix', 'user_data'], { env: env(), fetch });
+    assert.equal(r.code, 1, `${code}: ${r.stderr}`);
+    assert.match(
+      r.stderr,
+      new RegExp(`^dfs: ${code} New\\. — full response: dfs store show r_`, 'm'),
+    );
+  }
+});
+
 test('a network error exits 1', async () => {
   const r = await dfs(['appendix', 'user_data'], {
     env: env(),
