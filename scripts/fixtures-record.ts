@@ -10,10 +10,17 @@ import { sandboxEnv, send } from './sandbox.ts';
 const KEEP = 3;
 const DIR = join(import.meta.dirname, '..', 'test', 'fixtures');
 
-// Every array longer than KEEP keeps its first KEEP entries.
+// Every `items` array keeps its first KEEP entries; other arrays (`path`, `tasks`) stay whole.
 export function prune(v: unknown): unknown {
-  if (Array.isArray(v)) return v.slice(0, KEEP).map(prune);
-  if (isRecord(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, prune(x)]));
+  if (Array.isArray(v)) return v.map(prune);
+  if (isRecord(v)) {
+    return Object.fromEntries(
+      Object.entries(v).map(([k, x]) => [
+        k,
+        prune(k === 'items' && Array.isArray(x) ? x.slice(0, KEEP) : x),
+      ]),
+    );
+  }
   return v;
 }
 
@@ -50,9 +57,10 @@ async function main(): Promise<void> {
     example('/v3/serp/google/organic/task_post'),
   ]);
   const [task] = Array.isArray(post.tasks) ? post.tasks.filter(isRecord) : [];
+  if (typeof task?.id !== 'string') throw new Error('serp-google-organic-task-post: no task id');
   await record('serp-google-organic-task-get-advanced', [
     ...['serp', 'google', 'organic', 'task_get', 'advanced'],
-    String(task?.id),
+    task.id,
   ]);
 }
 

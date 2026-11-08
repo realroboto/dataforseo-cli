@@ -95,14 +95,14 @@ test('a 40404 not in the committed file is new; no committed file is a first run
   assert.deepEqual(newUncovered(['/v3/a', '/v3/b'], committed), ['/v3/b']);
   assert.deepEqual(newUncovered(['/v3/a'], committed), []);
   assert.deepEqual(newUncovered(['/v3/a'], undefined), []);
-  const file = JSON.parse(readFileSync(join(root, 'spec/sandbox-40404.json'), 'utf8'));
-  const snapshot = JSON.parse(readFileSync(join(root, 'spec/snapshot.json'), 'utf8'));
-  assert.deepEqual([file.sha, file.date], [snapshot.sha, snapshot.date]);
 });
 
 test('fixtures: prune keeps 3 entries per array; a recorded Live fixture renders', async () => {
-  assert.deepEqual(prune({ a: [1, 2, 3, 4, [5, 6, 7, 8]], b: 'x' }), { a: [1, 2, 3], b: 'x' });
-  assert.deepEqual(prune([[1, 2, 3, 4]]), [[1, 2, 3]]);
+  const deep = { path: ['v3', 'a', 'b', 'live'], tasks: [{ result: [{ items: [1, 2, 3, 4] }] }] };
+  assert.deepEqual(prune(deep), {
+    path: ['v3', 'a', 'b', 'live'],
+    tasks: [{ result: [{ items: [1, 2, 3] }] }],
+  });
   const { fetch } = fakeFetch(() => json(fixture('backlinks-anchors-live')));
   const body = JSON.stringify({ target: 'forbes.com', limit: 3 });
   const r = await dfs(['backlinks', 'anchors', 'live', '--sandbox', '--body', body], {

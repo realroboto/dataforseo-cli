@@ -8,13 +8,21 @@
   "tasks_error": 0,
   "tasks": [
     {
-      "id": "11080640-3076-0066-2000-122f82b6a1e0",
+      "id": "11080643-3076-0066-2000-148023663e6b",
       "status_code": 20000,
       "status_message": "Ok.",
       "time": "0 sec.",
       "cost": 0,
       "result_count": 1,
-      "path": ["v3", "serp", "google"],
+      "path": [
+        "v3",
+        "serp",
+        "google",
+        "organic",
+        "task_get",
+        "advanced",
+        "11080643-3076-0066-2000-148023663e6b"
+      ],
       "data": {
         "api": "serp",
         "function": "task_get",
@@ -29,11 +37,18 @@
           "location_code": 1006886,
           "language_code": "en",
           "check_url": "https://www.google.com/search?q=pizza&hl=en&gl=GB&ie=UTF-8&uule=w+CAIQIFISCXXeIa8LoNhHEZkq1d1aOpZS",
-          "datetime": "2026-11-07 20:18:35 +00:00",
+          "datetime": "2026-11-06 11:12:08 +00:00",
           "spell": null,
           "refinement_chips": null,
-          "item_types": ["find_results_on", "local_pack", "organic"],
-          "se_results_count": 69,
+          "item_types": [
+            "find_results_on",
+            "local_pack",
+            "organic",
+            "people_also_ask",
+            "google_reviews",
+            "knowledge_graph"
+          ],
+          "se_results_count": 66,
           "pages_count": 1,
           "items_count": 17,
           "items": [
@@ -49,21 +64,21 @@
                   "type": "find_results_on_element",
                   "title": "THE 10 BEST Pizza Places in Watford (Updated 2026)",
                   "domain": "google.com",
-                  "url": "https://google.com/goto?url=CAESkwEBxCJF1wGm3ieoo-X4m7uTYdGpz71wjBbuy9-GQAeq3sKn94FQyTO45820IDmn0Z2RY1XCxXpeO1dtEHf_4embcn8BQLDwCFLY-nBiNoFUEyc_0brseAAxDtEdlVQGT2N3TUaZqYE_gCgMFUI2R73HFI3uyDT_H7JxYRJbfI7mqysEAvskzmAp1hRNH-nRqtV9aik",
+                  "url": "https://google.com/goto?url=CAESkwEBxCJF1wk5s0X2kAT2b0WIcymTAq9HSgW5VEalLZ8i_dq-ly9sF3gIu5RnQ417jy70NE9CwzGGbGdwkN68ezrtitfmeclMLuKgr7dr41k3Y2FrXnhUB0w2JdRBFxQCD2nl_WDrtWW4N_U_8gVSlZkRZhsCu3PZsYc_tx5p-bXleFFJECt-wXy3vcAtdxWA1Mi1j0Q",
                   "source": "Tripadvisor"
                 },
                 {
                   "type": "find_results_on_element",
-                  "title": "THE 10 BEST Pizza Takeaway in Maidstone 2026 - Order Pizza ...",
+                  "title": "THE 10 BEST Pizza Takeaway in Sheffield 2026 - Order Pizza ...",
                   "domain": "google.com",
-                  "url": "https://google.com/goto?url=CAESdQHEIkXXw9wSINxsBdhx3PtCzSWm64uWHz32Cc1ZFuViGEO-2tFPeN9nUcfgS2EdI7TXeS_IEPw17cpGLuEbpt4rHcfzxn-W6pLiKAEz03FHpDz_WFBKeB79Uf5CWIsIRFC3W0zqoLxzTh-b09-mTKiIjR_eKQ",
+                  "url": "https://google.com/goto?url=CAESdQHEIkXXVlpmBnxHcn0rmHQZNXBxUorjEpVmKFOSaynPWpuHuiKmNVfN0BW5iaXZtp8kKiJGelWHdqKNKRGSpyALV5oWZoIXL9Xi1UbCBgte-g7Lljl_clJr-x37eK5TIBVRBKv_uz1LgT1lMa6vqec63Ast4w",
                   "source": "ubereats"
                 },
                 {
                   "type": "find_results_on_element",
                   "title": "14 Pizza Restaurants near Leeds",
                   "domain": "google.com",
-                  "url": "https://google.com/goto?url=CAEScQHEIkXXKLWL3Kz1u5gZLyPyOEv367ty84BXLC5wk59zAfD3K73NXXZCBdOPOqST9OymbXfi_tNYOg8Ui9XUHYWD0kNoRl5zFSlQoKO4f4gPlcR0SbLsnhswTTKqm2qksa_tYp_LY7nbw8i7pZz90xh6",
+                  "url": "https://google.com/goto?url=CAEScQHEIkXXNq8kb_iKgx1IeK2pDaBb-mWWBYOJUkLS266SwoFy9nCvSC6DRkaujogY6rZV87qitLTexnzUyNPVH3ypwapokN66yKJWGWygdzynWIEDU2VdCIQAFE5TddYJRod4lllseCtqOXvlBZpf9cE1",
                   "source": "squaremeal"
                 }
               ],
@@ -76,12 +91,12 @@
               "page": 1,
               "position": "left",
               "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[1]/div[1]/div[1]",
-              "title": "Crust Bros Pizza Covent Garden",
-              "description": "29 Bedford St \n\"Really light pizza dough and tasty toppings - very generous.\" \n",
-              "domain": "www.crustbros.co.uk",
-              "phone": "020 3034 0421",
+              "title": "Breadstall Pizza",
+              "description": "92 Berwick St \n\" Pizza dough done perfect and not sloppy.\" \n",
+              "domain": "www.breadstall.com",
+              "phone": null,
               "booking_url": null,
-              "url": "https://www.crustbros.co.uk/find-your-restaurant/covent-garden?utm_source=GMB&utm_medium=website_click&utm_campaign=crust-bros-covent-garden&utm_id=GMB",
+              "url": "https://www.breadstall.com/",
               "is_paid": false,
               "rating": {
                 "rating_type": "Max5",
@@ -89,7 +104,7 @@
                 "votes_count": 1600,
                 "rating_max": 5
               },
-              "cid": "17820353906423378423",
+              "cid": "2140288112563615677",
               "rectangle": null
             },
             {
@@ -99,20 +114,20 @@
               "page": 1,
               "position": "left",
               "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[3]/div[1]/div[1]",
-              "title": "Fatto a Mano Covent Garden",
-              "description": "30 St Martin's Ln \n\"... were perfectly distributed and did not overwhelm the pizza dough.\" \n",
-              "domain": "www.fattoamanopizza.com",
-              "phone": "020 3345 0003",
+              "title": "Berberè Pizzeria",
+              "description": "2 St Giles Square \n\" Pizzas were delicious and fairly priced.\" \n",
+              "domain": "www.berberepizzeria.co.uk",
+              "phone": "020 3781 1414",
               "booking_url": null,
-              "url": "https://www.fattoamanopizza.com/locations/covent-garden-london/",
+              "url": "https://www.berberepizzeria.co.uk/",
               "is_paid": false,
               "rating": {
                 "rating_type": "Max5",
                 "value": 4.7,
-                "votes_count": 2100,
+                "votes_count": 731,
                 "rating_max": 5
               },
-              "cid": "13311743875956888497",
+              "cid": "5068270305308051307",
               "rectangle": null
             }
           ]

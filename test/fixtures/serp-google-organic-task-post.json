@@ -8,13 +8,13 @@
   "tasks_error": 0,
   "tasks": [
     {
-      "id": "11080640-3076-0066-2000-122f82b6a1e0",
+      "id": "11080643-3076-0066-2000-148023663e6b",
       "status_code": 20100,
       "status_message": "Task Created.",
       "time": "0 sec.",
       "cost": 0,
       "result_count": 0,
-      "path": ["v3", "serp", "google"],
+      "path": ["v3", "serp", "google", "organic", "task_post"],
       "data": {
         "api": "serp",
         "function": "task_post",
@@ -29,13 +29,13 @@
       "result": null
     },
     {
-      "id": "11080640-3076-0066-2000-937347cba01c",
+      "id": "11080643-3076-0066-2000-6e3a280c472a",
       "status_code": 20100,
       "status_message": "Task Created.",
       "time": "0 sec.",
       "cost": 0,
       "result_count": 0,
-      "path": ["v3", "serp", "google"],
+      "path": ["v3", "serp", "google", "organic", "task_post"],
       "data": {
         "api": "serp",
         "function": "task_post",
@@ -53,13 +53,13 @@
       "result": null
     },
     {
-      "id": "11080640-3076-0066-2000-b529eac26263",
+      "id": "11080643-3076-0066-2000-fb339e8714f6",
       "status_code": 20100,
       "status_message": "Task Created.",
       "time": "0 sec.",
       "cost": 0,
       "result_count": 0,
-      "path": ["v3", "serp", "google"],
+      "path": ["v3", "serp", "google", "organic", "task_post"],
       "data": {
         "api": "serp",
         "function": "task_post",

@@ -66,7 +66,9 @@ function errorCodes(envelopes: unknown[]): number[] {
   });
 }
 
-const firstLine = (s: string) => s.split('\n').find((l) => !l.startsWith('dfs: 2')) ?? '';
+// First stderr line after the `dfs: 2xxxx <path> …` status lines: the reason.
+const reason = (s: string) => s.split('\n').find((l) => !l.startsWith('dfs: 2')) ?? '';
+const INVALID = new Set([40501, 40506]); // invalid field or value: fails even at exit 0
 
 export async function sandboxRun(
   io: Pick<Io, 'env' | 'fetch' | 'now' | 'sleep'>,
@@ -79,10 +81,10 @@ export async function sandboxRun(
   const failures: string[] = [];
 
   const judge = (path: string, s: Sent) => {
-    if (s.exit === 0) return;
     const codes = errorCodes(s.envelopes);
+    if (s.exit === 0 && !codes.some((c) => INVALID.has(c))) return;
     if (codes.length > 0 && codes.every((c) => c === NO_DATA)) uncovered.add(path);
-    else failures.push(`${path}: exit ${s.exit} [${codes.join(', ')}] ${firstLine(s.stderr)}`);
+    else failures.push(`${path}: exit ${s.exit} [${codes.join(', ')}] ${reason(s.stderr)}`);
   };
 
   // A task_post example also collects each returned id through every collect call of its level.
@@ -122,7 +124,8 @@ export async function sandboxRun(
       op: {},
     };
     try {
-      const planned = plan(catalog, ep, {}, Array.isArray(ex) ? ex : [ex], {
+      if (!Array.isArray(ex)) throw new DfsError(3, 'spec has no /v3/serp/id_list example');
+      const planned = plan(catalog, ep, {}, ex, {
         sandbox: true,
         validate: false,
       });
@@ -159,17 +162,15 @@ export function newUncovered(uncovered: string[], committed: Coverage | undefine
 
 // The baseline is the committed file (HEAD), not the working copy a failed run rewrote.
 function committedCoverage(root: string): Coverage | undefined {
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+  const at = `HEAD:${COVERAGE_FILE}`;
   try {
-    return JSON.parse(
-      execFileSync('git', ['show', `HEAD:${COVERAGE_FILE}`], {
-        cwd: root,
-        encoding: 'utf8',
-        stdio: 'pipe',
-      }),
-    );
+    git('cat-file', '-e', at);
   } catch {
-    return undefined;
+    return undefined; // not committed yet: first run
   }
+  return JSON.parse(git('show', at));
 }
 
 async function main(): Promise<number> {
