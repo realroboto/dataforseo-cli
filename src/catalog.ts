@@ -283,9 +283,14 @@ export async function dailyCheck(io: CheckIo): Promise<void> {
   }
 }
 
-export function openCatalog(env?: NodeJS.ProcessEnv) {
-  const { sha, date, spec } = readNewest(env);
-  applyOverlay(spec, readOverlay());
+export function openCatalog(env?: NodeJS.ProcessEnv): Catalog {
+  const snapshot = readNewest(env);
+  applyOverlay(snapshot.spec, readOverlay());
+  return catalogOf(snapshot);
+}
+
+// The command tree of a spec the overlay is already applied to.
+export function catalogOf({ sha, date, spec }: Snapshot) {
   const { root, endpoints } = buildTree(spec);
 
   // Words resolve to the longest spec path they match; a path-parameter slot takes the next
@@ -310,7 +315,7 @@ export function openCatalog(env?: NodeJS.ProcessEnv) {
   return { sha, date, spec, root, endpoints, resolve };
 }
 
-export type Catalog = ReturnType<typeof openCatalog>;
+export type Catalog = ReturnType<typeof catalogOf>;
 
 // Collect calls of a level by variant word; '' for a path with no variant word (lifecycle.md:
 // `task_get/<variant>/{id}`, bare `task_get/{id}`, or on_page `summary/{id}` when no task_get).

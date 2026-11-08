@@ -15,6 +15,7 @@
     "lint": "biome check",
     "format": "biome check --write",
     "spec:snapshot": "node scripts/spec-snapshot.ts",
+    "spec:check": "node scripts/spec-check.ts",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir dist/spec && cp spec/snapshot.json spec/overlay.yaml dist/spec/",
     "pack:check": "node scripts/pack-check.ts",
     "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm pack:check"

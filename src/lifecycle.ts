@@ -401,7 +401,7 @@ function exitOf(tasks: Task[], stop: number | undefined): number {
 export const COLLECT_USAGE = 'dfs [<module>] +collect [--full]';
 
 // shortcut: not in the spec, remove when the spec adds it (lifecycle.md, id_list hand path).
-const HAND_ID_LIST = '/v3/ai_optimization/id_list';
+export const HAND_ID_LIST = '/v3/ai_optimization/id_list';
 const NOT_SERVED = new Set([40400, 40402]);
 const ID_PAGE = 1000; // ids per id_list call
 const ID_WINDOW = 180 * 24 * 60 * 60 * 1000; // id_list reaches 6 months back
