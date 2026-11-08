@@ -16,7 +16,7 @@ Stubbed-`fetch` tests miss transport faults: open-seo's gzip regression passed t
 
 ## Decision
 
-- Seam 3 `pnpm test:sandbox`: real HTTP to `sandbox.dataforseo.com` at cost 0. Sends each spec request example unmodified on overlaid spec, collects Standard tasks, saves to a temp Store (34:131–133).
+- Seam 3 `pnpm test:sandbox`: real HTTP to `sandbox.dataforseo.com` at cost 0. Sends each spec request example unmodified on overlaid spec, but for time-bound dates (`id_list` `datetime_from`/`datetime_to`, `hotel_searches` `check_in`/`check_out`) moved into vendor window, span kept, collects Standard tasks, saves to a temp Store (34:131–133).
 - Committed file `spec/sandbox-40404.json` lists paths sandbox does not cover. New 40404 or any other error fails the run.
 - Runs on the owner's Mac only; script refuses outside macOS and under `CI`. Release runbook requires it (34:132, 34:154).
 - CI never uses network or a DataForSEO login; login never goes to GitHub (34:116, 34:134). Fixtures come from sandbox by `pnpm fixtures:record`, committed.
@@ -25,7 +25,7 @@ Stubbed-`fetch` tests miss transport faults: open-seo's gzip regression passed t
 
 Real wire behaviour checked before each release, at $0, with no secret outside the owner's machine.
 
-Open (2026-11-08): run red on 13 time-bound vendor examples plus one `language_code` fault; owner decision in #26.
+Amended (2026-11-08, #26): was "each example unmodified". Fixed vendor dates fail once time passes (13 examples red on every run); a known-failure list would hide value faults on those paths. `merchant/amazon/sellers` `language_code` `en` → `en_US` by overlay (vendor field docs).
 
 ## Source
 

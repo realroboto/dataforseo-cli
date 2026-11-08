@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { parse } from 'yaml';
 import { prune } from '../scripts/fixtures-record.ts';
 import { newUncovered, sandboxRun } from '../scripts/sandbox.ts';
+import { openCatalog } from '../src/catalog.ts';
 import { fakeFetch } from './helpers/fetch.ts';
 import { dfs } from './helpers/io.ts';
 
@@ -73,12 +74,72 @@ test('sandbox run: examples and collects go to the sandbox; 40404 is coverage, o
     spec.paths['/v3/backlinks/anchors/live'].post.requestBody.content['application/json'].schema
       .example,
   );
-  // The hand path carries the body of the serp/id_list example.
+  // The hand path carries the body of the serp/id_list example, dates moved into the window.
   const hand = calls.find((c) => c.url.endsWith('/v3/ai_optimization/id_list'));
-  assert.deepEqual(
-    JSON.parse(String(hand?.init?.body)),
-    spec.paths['/v3/serp/id_list'].post.requestBody.content['application/json'].schema.example,
+  const { datetime_from, datetime_to, ...rest } = JSON.parse(String(hand?.init?.body))[0];
+  const ex =
+    spec.paths['/v3/serp/id_list'].post.requestBody.content['application/json'].schema.example[0];
+  assert.deepEqual(rest, { limit: ex.limit, include_metadata: ex.include_metadata });
+  assert.notEqual(datetime_to, ex.datetime_to);
+});
+
+// Vendor rules from the spec field docs; a body outside them gets the sandbox's 40501.
+const at = (v: string) => Date.parse(`${v.replace(' ', 'T')}Z`);
+function vendorWindow(path: string, task: Record<string, string>): string | undefined {
+  const now = NOW();
+  if (path.endsWith('/id_list')) {
+    if (at(task.datetime_from) < now - 30 * 864e5) return "Invalid Field: 'datetime_from'.";
+    if (at(task.datetime_to) >= now) return "Invalid Field: 'datetime_to'.";
+  } else if (at(task.check_in) < now - (now % 864e5)) {
+    return "Invalid Field: 'check_in - must not be earlier than present date'.";
+  }
+}
+
+test('sandbox run: time-bound example dates move into the vendor window, span and values kept', async () => {
+  const paths = new Set([
+    '/v3/serp/id_list',
+    '/v3/business_data/id_list',
+    '/v3/ai_optimization/id_list',
+    '/v3/business_data/google/hotel_searches/live',
+    '/v3/business_data/google/hotel_searches/task_post',
+  ]);
+  const { fetch, calls } = fakeFetch((url, init) => {
+    const path = new URL(url).pathname;
+    if (path.includes('/task_get/')) return json(taskCode(40404));
+    const fault = vendorWindow(path, JSON.parse(String(init?.body))[0]);
+    return json(taskCode(fault ? 40501 : 40404, fault));
+  });
+  const { uncovered, failures } = await sandboxRun(
+    { env, fetch, now: NOW, sleep: async () => {} },
+    (p) => paths.has(p),
   );
+  assert.deepEqual(failures, []);
+  assert.deepEqual(uncovered, [...paths].sort());
+  const { spec } = JSON.parse(readFileSync(join(root, 'spec/snapshot.json'), 'utf8'));
+  const span = (t: Record<string, string>, a: string, b: string) => at(t[b]) - at(t[a]);
+  for (const [path, a, b] of [
+    ['/v3/serp/id_list', 'datetime_from', 'datetime_to'],
+    ['/v3/business_data/google/hotel_searches/live', 'check_in', 'check_out'],
+  ]) {
+    const ex = spec.paths[path].post.requestBody.content['application/json'].schema.example[0];
+    const sent = JSON.parse(String(calls.find((c) => c.url.endsWith(path))?.init?.body))[0];
+    assert.equal(span(sent, a, b), span(ex, a, b), `${path} span`);
+    assert.match(sent[a], ex[a].length === 10 ? /^\d{4}-\d\d-\d\d$/ : /^\S+ \d\d:\d\d:\d\d$/);
+    assert.deepEqual(
+      { ...sent, [a]: 0, [b]: 0 },
+      { ...ex, [a]: 0, [b]: 0 },
+      `${path} other values`,
+    );
+  }
+});
+
+test('overlay: merchant/amazon/sellers example carries an Amazon language_code', () => {
+  const ep = openCatalog().endpoints.find(
+    (e) => e.path === '/v3/merchant/amazon/sellers/task_post',
+  );
+  assert.deepEqual(ep?.op.requestBody?.content?.['application/json']?.schema?.example, [
+    { language_code: 'en_US', location_code: 2840, asin: 'B085RFFC9Q' },
+  ]);
 });
 
 test('sandbox run: an exit with no API answer (missing login) fails', async () => {
