@@ -5,12 +5,16 @@ import { existsSync } from 'node:fs';
 import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { checkSpec, readOverlay, readSnapshot, SPEC_DIR } from '../src/catalog.ts';
-import { isRecord } from '../src/json.ts';
+import {
+  COMMITS_URL,
+  checkSpec,
+  newestCommit,
+  rawUrl,
+  readOverlay,
+  readSnapshot,
+  SPEC_DIR,
+} from '../src/catalog.ts';
 import { applyOverlay } from '../src/overlay.ts';
-
-const REPO = 'dataforseo/OpenApiDocumentation';
-const FILE = 'openapi_specification.yaml';
 
 async function get(url: string, accept: string): Promise<Response> {
   const res = await fetch(url, { headers: { accept } });
@@ -18,25 +22,10 @@ async function get(url: string, accept: string): Promise<Response> {
   return res;
 }
 
-const commits: unknown = await (
-  await get(
-    `https://api.github.com/repos/${REPO}/commits?path=${FILE}&sha=master&per_page=1`,
-    'application/vnd.github+json',
-  )
-).json();
-const last = Array.isArray(commits) ? commits[0] : undefined;
-const commit = isRecord(last) && isRecord(last.commit) ? last.commit.committer : undefined;
-const sha = isRecord(last) ? last.sha : undefined;
-const date = isRecord(commit) ? commit.date : undefined;
-if (typeof sha !== 'string' || typeof date !== 'string') {
-  throw new Error(
-    `GitHub commits API: no commit for ${FILE}: ${JSON.stringify(commits).slice(0, 200)}`,
-  );
-}
-// By SHA, not master: no race between the two reads.
-const text = await (
-  await get(`https://raw.githubusercontent.com/${REPO}/${sha}/${FILE}`, '*/*')
-).text();
+const { sha, date } = newestCommit(
+  await (await get(COMMITS_URL, 'application/vnd.github+json')).json(),
+);
+const text = await (await get(rawUrl(sha), '*/*')).text();
 const spec = parse(text);
 
 const target = join(SPEC_DIR, 'snapshot.json');

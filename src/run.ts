@@ -2,7 +2,7 @@
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
 import { call, STORE_USAGE, store } from './call.ts';
-import { openCatalog } from './catalog.ts';
+import { dailyCheck, openCatalog, readNewest } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { COLLECT_USAGE, collectAll, runTasks, runUsage } from './lifecycle.ts';
 import {
@@ -45,15 +45,16 @@ function parse<T extends ParseArgsConfig['options']>(args: string[], options: T)
 }
 
 async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
-  const catalog = openCatalog();
   const [first, ...rest] = argv;
 
   if (argv.length === 1 && first === '--version') {
-    io.stdout.write(
-      `dfs ${pkg.version} (spec ${catalog.sha.slice(0, 7)}, ${catalog.date.slice(0, 10)})\n`,
-    );
+    const { sha, date } = readNewest(io.env);
+    io.stdout.write(`dfs ${pkg.version} (spec ${sha.slice(0, 7)}, ${date.slice(0, 10)})\n`);
     return;
   }
+  // Store commands do not read the spec; --version reports it offline.
+  if (first !== 'store') await dailyCheck(io);
+  const catalog = openCatalog(io.env);
 
   if (first === 'search') {
     // No option parse: a word like `-site` is query text.
