@@ -80,11 +80,12 @@ test('an unknown word or flag exits 3 with nothing on stdout', async () => {
   assert.equal(stderr, "dfs: unknown command word 'nope' after 'dfs serp'; see: dfs serp --help\n");
 });
 
-test('store commands of later builds exit 3, nothing sent', async () => {
-  for (const sub of ['spend', 'search', 'sql', 'backup']) {
-    const { code, stderr } = await dfs(['store', sub]);
-    assert.equal(code, 3);
-    assert.equal(stderr, `dfs: store ${sub}: not in this build yet\n`);
+test('store --help and the root help list every store command', async () => {
+  const help = await dfs(['store', '--help']);
+  const root = await dfs([]);
+  for (const sub of ['show', 'list', 'search', 'spend', 'sql', 'backup', 'path']) {
+    assert.match(help.stdout, new RegExp(`dfs store ${sub}\\b`), sub);
+    assert.match(root.stdout, new RegExp(`^ {2}store ${sub}\\b`, 'm'), sub);
   }
 });
 

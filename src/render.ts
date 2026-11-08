@@ -67,7 +67,11 @@ commands:
   schema <words…>    request fields of an endpoint
   search "<words>"   find endpoints by path words and descriptions
   store show <id>    reprint a saved response, no API call (--from <n>, --full)
-  store list         saved responses, newest first
+  store list         saved responses, newest first (--since <age>, --path <words>)
+  store search "<words>"   stored items holding every word, diacritics folded (--since, --path)
+  store spend        cost of non-sandbox tasks (--since <age>, --by day|module|path|tag)
+  store sql "<select>"     read-only SQL over the Store (schema: docs/spec/modules/store.md)
+  store backup <file>      consistent copy of the Store, file 600, while dfs runs
   store path         the Store file
 `;
 }
