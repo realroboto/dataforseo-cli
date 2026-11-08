@@ -4,7 +4,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { call, STORE_USAGE, store } from './call.ts';
 import { openCatalog } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
-import { runTasks, runUsage } from './lifecycle.ts';
+import { COLLECT_USAGE, collectAll, runTasks, runUsage } from './lifecycle.ts';
 import {
   nodeHelp,
   rootHelp,
@@ -110,6 +110,22 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
   if (positionals.length === 0) {
     io.stdout.write(rootHelp(catalog.root, catalog));
     return;
+  }
+  if (positionals.includes('+collect')) {
+    if (values.help) {
+      io.stdout.write(`usage: ${COLLECT_USAGE}\n`);
+      return;
+    }
+    const [module, ...extra] = positionals.slice(0, -1);
+    if (
+      positionals.at(-1) !== '+collect' ||
+      extra.length > 0 ||
+      (module && !catalog.root.children.has(module))
+    ) {
+      throw new DfsError(3, `+collect runs at the root or one module; usage: ${COLLECT_USAGE}`);
+    }
+    if (values.wait !== undefined) throw new DfsError(3, '+collect --wait: not in this build yet');
+    return collectAll(catalog, module, values, io);
   }
   const at = positionals.indexOf('+run');
   if (at >= 0) {

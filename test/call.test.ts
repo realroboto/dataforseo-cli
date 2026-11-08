@@ -372,7 +372,7 @@ test('Store: dir 700, file 600, WAL', async () => {
   assert.equal(statSync(join(e.DFS_CONFIG_DIR, 'store.db')).mode & 0o777, 0o600);
   const db = new DatabaseSync(join(e.DFS_CONFIG_DIR, 'store.db'), { readOnly: true });
   assert.deepEqual({ ...db.prepare('PRAGMA journal_mode').get() }, { journal_mode: 'wal' });
-  assert.deepEqual({ ...db.prepare('PRAGMA user_version').get() }, { user_version: 4 });
+  assert.deepEqual({ ...db.prepare('PRAGMA user_version').get() }, { user_version: 5 });
   db.close();
 });
 

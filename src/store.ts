@@ -79,6 +79,12 @@ const TASK = `CREATE TABLE task (
   sandbox INTEGER NOT NULL
 )`;
 
+// Added in user_version 5: the end of the last `id_list` pass per module (store.md, `sync`).
+const SYNC = `CREATE TABLE sync (
+  module TEXT PRIMARY KEY,
+  last_pass TEXT NOT NULL
+)`;
+
 export const configDir = (env: NodeJS.ProcessEnv): string =>
   env.DFS_CONFIG_DIR || join(homedir(), '.config', 'dfs');
 export const storeFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'store.db');
@@ -131,6 +137,7 @@ export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
     if (user_version < 2) db.exec(`BEGIN; ${PRICE}; PRAGMA user_version = 2; COMMIT`);
     if (user_version < 3) db.exec(`BEGIN; ${REUSE}; PRAGMA user_version = 3; COMMIT`);
     if (user_version < 4) db.exec(`BEGIN; ${TASK}; PRAGMA user_version = 4; COMMIT`);
+    if (user_version < 5) db.exec(`BEGIN; ${SYNC}; PRAGMA user_version = 5; COMMIT`);
     importUnsaved(db, env);
     return db;
   } catch (e) {
@@ -274,3 +281,29 @@ export function updateTask(
      cost = CASE WHEN ? IS NOT NULL AND ? != 0 THEN ? ELSE cost END WHERE id = ?`,
   ).run(u.state, u.status_code, u.collected_at, u.collect_response, u.cost, u.cost, u.cost, id);
 }
+
+// A cost reported after the charging call (`id_list`) replaces it only when non-zero.
+export const setCost = (db: DatabaseSync, id: string, cost: number | null): void => {
+  if (cost) db.prepare('UPDATE task SET cost = ? WHERE id = ?').run(cost, id);
+};
+
+// Pending tasks whose task_post path starts with `prefix`, oldest first.
+export const pendingTasks = (db: DatabaseSync, prefix: string): Task[] =>
+  db
+    .prepare(`SELECT * FROM task WHERE state = 'pending' AND path LIKE ? || '%' ORDER BY rowid`)
+    .all(prefix) as Task[];
+
+// Start of the next id_list pass of a module: the last pass, else the Store's creation, which is
+// the time of its first response (lifecycle.md); undefined for an empty Store.
+export function syncStart(db: DatabaseSync, module: string): string | undefined {
+  const row = db.prepare('SELECT last_pass FROM sync WHERE module = ?').get(module) as
+    | { last_pass: string }
+    | undefined;
+  if (row) return row.last_pass;
+  const first = db.prepare('SELECT min(time) AS t FROM response').get() as { t: string | null };
+  return first.t ?? undefined;
+}
+
+export const setSync = (db: DatabaseSync, module: string, at: string): void => {
+  db.prepare('INSERT OR REPLACE INTO sync (module, last_pass) VALUES (?, ?)').run(module, at);
+};

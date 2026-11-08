@@ -37,6 +37,7 @@ export function rootHelp(root: Level, spec: { sha: string; date: string }): stri
 usage: dfs <module> <words…> [--help]   list a level, or show an endpoint
        dfs <endpoint words…> [flags]     call an endpoint
        dfs <level> +run [variant] --body …   post tasks, wait, collect (levels with task_post)
+       dfs [<module>] +collect   collect pending tasks; recover lost ids through id_list
        dfs --version
 
 call flags:
@@ -52,6 +53,7 @@ call flags:
   cost guard: exit 4, nothing sent, when the estimate passes the ceiling or the price is unknown
   reuse: the same paid request within 12 h of a full success returns the stored response at $0
   +run: exit 6 with the pending task ids when the wait ends; dfs +collect collects them later
+  +collect: one pass, never posts; exit 6 while tasks stay pending
 
 modules:
 ${[...root.children.keys()]

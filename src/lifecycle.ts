@@ -1,5 +1,6 @@
 // Lifecycle (docs/spec/modules/lifecycle.md): `+run` posts tasks under one cost guard, saves each
-// post response, waits on `tasks_ready`, and collects only its own task ids.
+// post response, waits on `tasks_ready`, and collects only its own task ids. `+collect` collects
+// pending tasks and recovers lost ids through `id_list`.
 import { setTimeout as pause } from 'node:timers/promises';
 import {
   type CallFlags,
@@ -13,14 +14,25 @@ import {
   reusable,
   reuseRow,
 } from './call.ts';
-import { type Catalog, collectPaths, type Endpoint, type Level } from './catalog.ts';
+import { type Catalog, collectPaths, type Endpoint, isLive, type Level } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { type Plan, plan } from './planner.ts';
 import { estimate, guard, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
-import { getRow, getTask, insertTasks, openStore, type Task, updateTask } from './store.ts';
+import {
+  getRow,
+  getTask,
+  insertTasks,
+  openStore,
+  pendingTasks,
+  setCost,
+  setSync,
+  syncStart,
+  type Task,
+  updateTask,
+} from './store.ts';
 
 export type RunFlags = CallFlags & { wait?: string };
 
@@ -210,48 +222,6 @@ export async function runTasks(
 
   const pending = () => [...tasks.values()].filter((t) => t.state === 'pending');
   const free = { sandbox, free: true, estimate: 0 };
-  const param = (ep: Endpoint) => /\{(\w+)\}/.exec(ep.path)?.[1] ?? 'id';
-
-  // One collect call; the task stays pending until its result is ready (on_page: crawl finished).
-  async function collect(t: Task) {
-    const ep = collects.get(t.variant ?? '') ?? (collects.get(variant) as Endpoint);
-    const planned = plan(catalog, ep, { [param(ep)]: t.id }, undefined, {
-      sandbox,
-      validate: true,
-    });
-    const x = await exchange(catalog, ep, planned, free, io, warn);
-    if (!x.saved) return; // free: the next collect fetches it again
-    const [r] = tasksOf(x.parsed);
-    const code = num(r?.status_code);
-    const [result] = Array.isArray(r?.result) ? r.result : [];
-    const crawled =
-      !ep.path.includes('/summary/') || (isRecord(result) && result.crawl_progress === 'finished');
-    let state: Task['state'] = 'pending';
-    if (code === null || NOT_READY.has(code)) state = 'pending';
-    else if (code === EXPIRED) state = 'expired';
-    else if (!isOk(code)) state = 'failed';
-    else if (crawled) state = 'collected';
-    if (typeof r?.status_message === 'string') messages.set(t.id, r.status_message);
-    const done = state === 'collected';
-    const u = {
-      state,
-      status_code: code ?? t.status_code,
-      collected_at: done ? new Date(now()).toISOString() : null,
-      collect_response: done ? x.row.id : null,
-      cost: num(r?.cost),
-    };
-    try {
-      const db = openStore(io.env);
-      try {
-        updateTask(db, t.id, u);
-      } finally {
-        db.close();
-      }
-    } catch (e) {
-      warn(`task ${t.id} state not saved (${messageOf(e)})`);
-    }
-    tasks.set(t.id, { ...t, ...u, cost: u.cost ? u.cost : t.cost });
-  }
 
   // Poll at 5, 10, 20, 30, 30 … s until every own task is done or the wait ends.
   const deadline = now() + wait * 1000;
@@ -270,16 +240,105 @@ export async function runTasks(
       return t?.state === 'pending' ? [t] : [];
     });
     // In parallel: Transport caps the requests in flight.
-    await Promise.all(mine.map(collect));
+    await Promise.all(
+      mine.map(async (t) => tasks.set(t.id, await collectTask(catalog, t, io, warn, messages))),
+    );
   }
 
-  // stderr: task lines of tasks not collected, cut to the budget.
-  const open = [...tasks.values()].filter((t) => t.state !== 'collected');
   const left = pending().length;
-  const remedy =
+  report(
+    [...tasks.values()],
+    messages,
+    used,
     left > 0
       ? `dfs: 6 ${left} tasks pending${stop === undefined ? ` after ${wait} s` : ''} — collect them later: dfs +collect`
-      : '';
+      : '',
+    flags.full === true,
+    io,
+  );
+  return exitOf([...tasks.values()], stop);
+}
+
+// The longest level that prefixes a task_post or Live path and has a collect call (lifecycle.md,
+// recovered ids). Another path, such as on_page `instant_pages`, maps to no level.
+function collectLevel(catalog: Catalog, path: string): Level | undefined {
+  const words = path.split('/').filter(Boolean).slice(1); // drop `v3`
+  for (let k = words.length - 1; k > 0; k--) {
+    if (words[k] !== 'task_post' && words[k] !== 'live') continue;
+    try {
+      const { node } = catalog.resolve(words.slice(0, k));
+      if (collectPaths(node).size > 0) return node;
+    } catch {
+      // not a level: try a shorter prefix
+    }
+  }
+  return undefined;
+}
+
+const param = (ep: Endpoint) => /\{(\w+)\}/.exec(ep.path)?.[1] ?? 'id';
+
+// One collect call through the task's stored variant; the task stays pending until its result is
+// ready (on_page: crawl finished). Returns the task with its new state, also saved.
+async function collectTask(
+  catalog: Catalog,
+  t: Task,
+  io: Io,
+  warn: (w: string) => void,
+  messages: Map<string, string>,
+): Promise<Task> {
+  const level = collectLevel(catalog, t.path);
+  const ep = level && collectPaths(level).get(t.variant ?? '');
+  if (!ep) {
+    warn(`task ${t.id}: no collect call for ${t.path} ${t.variant ?? ''}`.trimEnd());
+    return t;
+  }
+  const sandbox = t.sandbox === 1;
+  const planned = plan(catalog, ep, { [param(ep)]: t.id }, undefined, { sandbox, validate: true });
+  const x = await exchange(catalog, ep, planned, { sandbox, free: true, estimate: 0 }, io, warn);
+  if (!x.saved) return t; // free: the next collect fetches it again
+  const [r] = tasksOf(x.parsed);
+  const code = num(r?.status_code);
+  const [result] = Array.isArray(r?.result) ? r.result : [];
+  const crawled =
+    !ep.path.includes('/summary/') || (isRecord(result) && result.crawl_progress === 'finished');
+  let state: Task['state'] = 'pending';
+  if (code === null || NOT_READY.has(code)) state = 'pending';
+  else if (code === EXPIRED) state = 'expired';
+  else if (!isOk(code)) state = 'failed';
+  else if (crawled) state = 'collected';
+  if (typeof r?.status_message === 'string') messages.set(t.id, r.status_message);
+  const done = state === 'collected';
+  const u = {
+    state,
+    status_code: code ?? t.status_code,
+    collected_at: done ? new Date((io.now ?? Date.now)()).toISOString() : null,
+    collect_response: done ? x.row.id : null,
+    cost: num(r?.cost),
+  };
+  try {
+    const db = openStore(io.env);
+    try {
+      updateTask(db, t.id, u);
+    } finally {
+      db.close();
+    }
+  } catch (e) {
+    warn(`task ${t.id} state not saved (${messageOf(e)})`);
+  }
+  return { ...t, ...u, cost: u.cost ? u.cost : t.cost };
+}
+
+// stderr: task lines of tasks not collected, cut to the budget, then the remedy line. stdout: the
+// collect responses of collected tasks, in order, sharing the budget. `used`: characters printed.
+function report(
+  tasks: Task[],
+  messages: Map<string, string>,
+  used: number,
+  remedy: string,
+  full: boolean,
+  io: Io,
+): void {
+  const open = tasks.filter((t) => t.state !== 'collected');
   const room = BUDGET - used - remedy.length - 1;
   let shown = '';
   for (const [i, t] of open.entries()) {
@@ -297,15 +356,14 @@ export async function runTasks(
   used += shown.length;
   io.stderr.write(shown);
 
-  // stdout: the collect responses of collected tasks, in post order, sharing the budget.
-  const done = [...tasks.values()].filter((t) => t.state === 'collected');
+  const done = tasks.filter((t) => t.state === 'collected');
   const db = openStore(io.env);
   try {
     let out = '';
     for (const [i, t] of done.entries()) {
       const row = t.collect_response ? getRow(db, t.collect_response) : undefined;
       if (!row?.body) continue;
-      if (flags.full) {
+      if (full) {
         out += `${row.body}\n`;
         continue;
       }
@@ -330,10 +388,193 @@ export async function runTasks(
   } finally {
     db.close();
   }
+}
 
-  // Worst class wins, 2 > 1 > 6 > 0 (exit-codes-flags.md).
-  const failed = [...tasks.values()].filter((t) => t.state === 'failed' || t.state === 'expired');
+// Worst class wins, 2 > 1 > 6 > 0 (exit-codes-flags.md). `stop`: exit class of a failed call.
+function exitOf(tasks: Task[], stop: number | undefined): number {
+  const failed = tasks.filter((t) => t.state === 'failed' || t.state === 'expired');
   if (stop === 2 || failed.some((t) => isAccount(200, t.status_code))) return 2;
-  if (stop === 1 || (tasks.size > 0 && failed.length === tasks.size)) return 1;
-  return open.length > 0 ? 6 : 0;
+  if (stop === 1 || (tasks.length > 0 && failed.length === tasks.length)) return 1;
+  return tasks.some((t) => t.state !== 'collected') ? 6 : 0;
+}
+
+export const COLLECT_USAGE = 'dfs [<module>] +collect [--full]';
+
+// shortcut: not in the spec, remove when the spec adds it (lifecycle.md, id_list hand path).
+const HAND_ID_LIST = '/v3/ai_optimization/id_list';
+const NOT_SERVED = new Set([40400, 40402]);
+const ID_PAGE = 1000; // ids per id_list call
+const ID_WINDOW = 180 * 24 * 60 * 60 * 1000; // id_list reaches 6 months back
+// id_list time format: "yyyy-mm-dd hh:mm:ss +00:00"
+const listTime = (ms: number) =>
+  `${new Date(ms).toISOString().slice(0, 19).replace('T', ' ')} +00:00`;
+
+function idListOf(catalog: Catalog, module: string): Endpoint | undefined {
+  const path = `/v3/${module}/id_list`;
+  const ep = catalog.endpoints.find((e) => e.path === path);
+  if (ep || path !== HAND_ID_LIST) return ep;
+  return { path, method: 'post', words: [module, 'id_list'], op: {} };
+}
+
+// Collect call of a recovered id: one collect path, else `advanced`, then `regular`. A Live id
+// takes task_get only (31:136); on_page summary is for crawls.
+function recoveredVariant(level: Level, live: boolean): string | undefined {
+  const paths = collectPaths(level);
+  const word =
+    paths.size === 1 ? [...paths.keys()][0] : ['advanced', 'regular'].find((w) => paths.has(w));
+  if (word === undefined) return undefined;
+  return !live || paths.get(word)?.path.includes('/task_get/') ? word : undefined;
+}
+
+const pathOf = (url: unknown): string | undefined => {
+  if (typeof url !== 'string') return undefined;
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.startsWith('/') ? url : undefined;
+  }
+};
+
+// `dfs [<module>] +collect`: one pass. Lost ids through id_list since the last pass, then a
+// collect call for every pending task (lifecycle.md). Never posts.
+export async function collectAll(
+  catalog: Catalog,
+  module: string | undefined,
+  flags: { full?: boolean },
+  io: Io,
+): Promise<number> {
+  const now = (io.now ?? Date.now)();
+  let used = 0;
+  const err = (line: string) => {
+    used += line.length + 1;
+    io.stderr.write(`${line}\n`);
+  };
+  const warn = (w: string) => err(`dfs: warning: ${w}`);
+  const messages = new Map<string, string>();
+  let stop: number | undefined;
+  const worst = (exit: number) => {
+    if (exit === 2 || (exit === 1 && stop !== 2)) stop = exit;
+  };
+
+  const modules = module ? [module] : [...catalog.root.children.keys()].toSorted();
+  for (const m of modules) {
+    const ep = idListOf(catalog, m);
+    if (!ep) continue;
+    const db = openStore(io.env);
+    let from: number;
+    try {
+      from = Math.max(Date.parse(syncStart(db, m) ?? new Date(now).toISOString()), now - ID_WINDOW);
+    } finally {
+      db.close();
+    }
+    let ok = true;
+    // `from < now` only guards entry: an empty window lists nothing.
+    for (let offset = 0; from < now; offset += ID_PAGE) {
+      const body = [
+        {
+          datetime_from: listTime(from),
+          datetime_to: listTime(now),
+          limit: ID_PAGE,
+          offset,
+          sort: 'asc',
+        },
+      ];
+      const planned = plan(catalog, ep, {}, body, { sandbox: false, validate: false });
+      const x = await exchange(
+        catalog,
+        ep,
+        planned,
+        { sandbox: false, free: true, estimate: 0 },
+        io,
+        warn,
+      );
+      const [t] = tasksOf(x.parsed);
+      const code =
+        isRecord(x.parsed) && x.parsed.status_code !== 20000
+          ? x.parsed.status_code
+          : t?.status_code;
+      if (ep.path === HAND_ID_LIST && (x.res.status === 404 || NOT_SERVED.has(num(code) ?? 0))) {
+        warn('ai_optimization id_list not served — lost ids not recoverable');
+        ok = false;
+        break;
+      }
+      const o = outcome(x.res.status, x.parsed, x.row.id);
+      if (o.exit !== 0) {
+        o.lines.forEach(err);
+        worst(o.exit);
+        ok = false;
+        break;
+      }
+      const results = (Array.isArray(t?.result) ? t.result : []).filter(isRecord);
+      recover(results, x.row.id);
+      if (results.length < ID_PAGE) break;
+    }
+    if (ok) {
+      const db = openStore(io.env);
+      try {
+        setSync(db, m, new Date(now).toISOString());
+      } finally {
+        db.close();
+      }
+    }
+  }
+
+  // Lost ids: a known task gets the id_list cost (store.md cost rule); an unknown one a task row.
+  function recover(results: Record<string, unknown>[], listResponse: string) {
+    const db = openStore(io.env);
+    try {
+      for (const r of results) {
+        if (typeof r.id !== 'string') continue;
+        if (getTask(db, r.id)) {
+          setCost(db, r.id, num(r.cost));
+          continue;
+        }
+        const path = pathOf(r.url);
+        const level = path && collectLevel(catalog, path);
+        const variant = level ? recoveredVariant(level, isLive(path)) : undefined;
+        if (variant === undefined)
+          warn(`task ${r.id}: ${String(r.url)} maps to no collect call — not collected`);
+        const posted = Date.parse(String(r.datetime_posted));
+        insertTasks(db, [
+          {
+            id: r.id,
+            post_response: listResponse,
+            path: path ?? String(r.url),
+            variant: variant || null,
+            // A task with no collect call keeps its cost and is not tried again.
+            state: variant === undefined ? 'failed' : 'pending',
+            status_code: null,
+            cost: num(r.cost),
+            tag: null,
+            posted_at: new Date(Number.isNaN(posted) ? now : posted).toISOString(),
+            collected_at: null,
+            collect_response: null,
+            sandbox: 0,
+          },
+        ]);
+      }
+    } finally {
+      db.close();
+    }
+  }
+
+  const db = openStore(io.env);
+  let pending: Task[];
+  try {
+    pending = pendingTasks(db, module ? `/v3/${module}/` : '/v3/');
+  } finally {
+    db.close();
+  }
+  // In parallel: Transport caps the requests in flight.
+  const tasks = await Promise.all(pending.map((t) => collectTask(catalog, t, io, warn, messages)));
+  const left = tasks.filter((t) => t.state === 'pending').length;
+  report(
+    tasks,
+    messages,
+    used,
+    left > 0 ? `dfs: 6 ${left} tasks pending — collect them later: dfs +collect` : '',
+    flags.full === true,
+    io,
+  );
+  return exitOf(tasks, stop);
 }
