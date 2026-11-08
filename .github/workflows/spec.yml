@@ -1,0 +1,34 @@
+name: Spec drift check
+
+on:
+  schedule:
+    # Mondays 06:17 UTC; off the hour, when GitHub delays or drops scheduled runs.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# actions: write for the self re-enable only. No secrets: the newest vendor spec is public.
+permissions:
+  contents: read
+  actions: write
+
+# Detection only: no auto PR, no auto merge. GitHub-owned actions only, no third-party action.
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      # A public repo's schedule stops after 60 days with no activity; re-enable it each run.
+      - run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/spec.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - run: npm install --global "$(jq -r .packageManager package.json)"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm spec:check
+      # Alert check (owner setup checklist 7): repository variable SPEC_CHECK_FORCE_FAIL=1.
+      - if: vars.SPEC_CHECK_FORCE_FAIL == '1'
+        run: |
+          echo "SPEC_CHECK_FORCE_FAIL is 1: forced failure"
+          exit 1

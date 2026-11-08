@@ -146,7 +146,7 @@ export function outcome(
   return { lines, exit: failed.length > 0 ? 6 : 0 };
 }
 
-const USER_DATA = '/v3/appendix/user_data';
+export const USER_DATA = '/v3/appendix/user_data';
 const DAY = 24 * 60 * 60 * 1000;
 const REUSE_WINDOW = DAY / 2;
 

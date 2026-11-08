@@ -8,7 +8,7 @@ import { deref, type Fault, faults, fields, type Schema, type Schemas } from './
 const SANDBOX = 'https://sandbox.dataforseo.com';
 const SHOWN = 10; // faults named in one message; the rest are counted
 // Limits table: these paths take 20 tasks, by path, not by the word `live` (r31:154).
-const TWENTY_TASK_PATHS = new Set([
+export const TWENTY_TASK_PATHS = new Set([
   '/v3/on_page/instant_pages',
   '/v3/on_page/content_parsing/live',
   '/v3/on_page/page_screenshot',
