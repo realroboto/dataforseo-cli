@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parse } from 'yaml';
-import { specProblems } from '../scripts/spec-check.ts';
+import { report, specProblems } from '../scripts/spec-check.ts';
 import { readOverlay, readSnapshot, type Spec } from '../src/catalog.ts';
 import { RULES } from '../src/pricing.ts';
 
@@ -141,4 +141,24 @@ test('spec.yml: weekly and on dispatch, no secrets, no third-party action, self 
   const force = steps.findIndex((s) => s.if === "vars.SPEC_CHECK_FORCE_FAIL == '1'");
   assert.ok(enable >= 0 && check > enable && force > enable, 'enable, check, forced failure');
   assert.match(steps[force].run ?? '', /exit 1/);
+});
+
+test('without the overlay: 85 typed filter fields (condition 7) and failing examples (condition 4)', () => {
+  const found = specProblems(readSnapshot().spec, { overlay: '1.0.0', actions: [] });
+  assert.equal(found.filter((p) => p.condition === 7).length, 85);
+  assert.ok(found.some((p) => p.condition === 4));
+  assert.deepEqual([...new Set(found.map((p) => p.condition))], [4, 7]);
+});
+
+test('job summary lists paths added and removed against the snapshot, and the problems', () => {
+  const { spec } = readSnapshot();
+  copy(spec, '/v3/serp/google/organic/live/advanced', '/v3/serp/google/new/live');
+  delete spec.paths['/v3/appendix/status'];
+  const { text, failed } = report(spec, 'abcdef0123', '2026-11-09T00:00:00Z');
+  assert.equal(failed, true);
+  assert.match(text, /## spec:check abcdef0 \(2026-11-09T00:00:00Z\) against snapshot 55a4ed0/);
+  assert.match(text, /### Paths added \(1\)\n\n- `\/v3\/serp\/google\/new\/live`/);
+  assert.match(text, /### Paths removed \(1\)\n\n- `\/v3\/appendix\/status`/);
+  assert.match(text, /- `2: \/v3\/serp\/google\/new\/live: no price rule, not free`/);
+  assert.equal(report(readSnapshot().spec, 'x', 'y').failed, false);
 });

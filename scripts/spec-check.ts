@@ -15,6 +15,7 @@ import {
   type Spec,
 } from '../src/catalog.ts';
 import { DfsError, messageOf } from '../src/errors.ts';
+import { isRecord } from '../src/json.ts';
 import { HAND_ID_LIST } from '../src/lifecycle.ts';
 import { applyOverlay } from '../src/overlay.ts';
 import { plan, TWENTY_TASK_PATHS } from '../src/planner.ts';
@@ -32,8 +33,9 @@ export function specProblems(spec: unknown, overlay: unknown): Problem[] {
   for (const t of applyOverlay(overlaid, overlay)) add(4, `overlay action has no effect: ${t}`);
   const previous = Object.keys(readSnapshot().spec.paths).length;
   for (const p of checkSpec(overlaid, previous)) add(1, p);
-  if (out.some((p) => p.condition === 1)) return out; // the other conditions read a sound spec
   const s = overlaid as Spec;
+  // Not an OpenAPI document: conditions 2-7 have nothing to read.
+  if (!isRecord(s) || !isRecord(s.paths) || !isRecord(s.components?.schemas)) return out;
   const catalog = catalogOf({ sha: '', date: '', spec: s });
   const paths = Object.keys(s.paths);
   const known = new Set(paths);
@@ -84,19 +86,19 @@ async function get(url: string, accept: string): Promise<Response> {
   return res;
 }
 
-async function main(): Promise<number> {
-  const { sha, date } = newestCommit(
-    await (await get(COMMITS_URL, 'application/vnd.github+json')).json(),
-  );
-  const spec = parse(await (await get(rawUrl(sha), '*/*')).text());
+// The job summary: paths added and removed against the committed snapshot, then the problems.
+export function report(
+  spec: unknown,
+  sha: string,
+  date: string,
+): { text: string; failed: boolean } {
   const problems = specProblems(spec, readOverlay());
   const snapshot = readSnapshot();
-  const now = Object.keys(spec?.paths ?? {});
-  const was = Object.keys(snapshot.spec.paths);
-  const added = now.filter((p) => !Object.hasOwn(snapshot.spec.paths, p));
-  const removed = was.filter((p) => !Object.hasOwn(spec?.paths ?? {}, p));
+  const current = isRecord(spec) && isRecord(spec.paths) ? spec.paths : {};
+  const added = Object.keys(current).filter((p) => !Object.hasOwn(snapshot.spec.paths, p));
+  const removed = Object.keys(snapshot.spec.paths).filter((p) => !Object.hasOwn(current, p));
   const list = (xs: string[]) => (xs.length ? xs.map((x) => `- \`${x}\``).join('\n') : 'none');
-  const report = [
+  const text = [
     `## spec:check ${sha.slice(0, 7)} (${date}) against snapshot ${snapshot.sha.slice(0, 7)}`,
     `### Paths added (${added.length})`,
     list(added),
@@ -106,9 +108,17 @@ async function main(): Promise<number> {
     list(problems.map((p) => `${p.condition}: ${p.detail}`)),
     '',
   ].join('\n\n');
-  process.stdout.write(report);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
-  return problems.length > 0 ? 1 : 0;
+  return { text, failed: problems.length > 0 };
+}
+
+async function main(): Promise<number> {
+  const { sha, date } = newestCommit(
+    await (await get(COMMITS_URL, 'application/vnd.github+json')).json(),
+  );
+  const { text, failed } = report(parse(await (await get(rawUrl(sha), '*/*')).text()), sha, date);
+  process.stdout.write(text);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
+  return failed ? 1 : 0;
 }
 
 if (import.meta.main) {
