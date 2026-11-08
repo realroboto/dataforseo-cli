@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readSnapshot } from '../src/catalog.ts';
+import { openCatalog, readSnapshot } from '../src/catalog.ts';
 import { dfs } from './helpers/io.ts';
 
 const MODULES = [
@@ -97,6 +97,31 @@ test('an endpoint --help shows how to call it', async () => {
   );
   const get = await dfs(['appendix', 'user_data', '--help']);
   assert.match(get.stdout, /^call: dfs appendix user_data \[--full\]/m);
+});
+
+test('every spec path (565) has a command whose --help exits 0 and shows its call line', async () => {
+  const endpoints = openCatalog().endpoints;
+  assert.equal(endpoints.length, 565);
+  for (const ep of endpoints) {
+    const words = ep.words.map((w) => (w.startsWith('<') ? 'x1' : w));
+    const r = await dfs([...words, '--help']);
+    assert.equal(r.code, 0, `${ep.path}: ${r.stderr}`);
+    assert.match(r.stdout, /^call: dfs /m, ep.path);
+  }
+});
+
+test('an unexpected exception exits 5 with its message on stderr', async () => {
+  let stderr = '';
+  const r = await dfs(['--help'], {
+    stdout: {
+      write: () => {
+        throw new Error('stdout closed');
+      },
+    },
+    stderr: { write: (s: string) => (stderr += s) },
+  });
+  assert.equal(r.code, 5);
+  assert.equal(stderr, 'dfs: stdout closed\n');
 });
 
 test('schema lists request fields, nested ones included', async () => {

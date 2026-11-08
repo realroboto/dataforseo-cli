@@ -31,6 +31,8 @@ const ACCOUNT = new Set([40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207,
 const OK_WARNING = new Set([40106, 40102, 40007]);
 export const isAccount = (http: number, code: unknown) =>
   http === 401 || http === 402 || (typeof code === 'number' && ACCOUNT.has(code));
+// Not ready (exit table): 20100 on a get, 40601 handed, 40602 in queue.
+export const NOT_READY = new Set([20100, 40601, 40602]);
 export const isOk = (code: unknown) =>
   typeof code === 'number' && (Math.floor(code / 10_000) === 2 || OK_WARNING.has(code));
 
@@ -115,10 +117,12 @@ function redactLogin(text: string, body: unknown): string {
 const FRESH = 'to send it again, add --fresh';
 
 // stderr lines after the status line, and the exit code: worst class wins, 2 > 1 > 6 > 0.
+// `get`: 20100 is pending on a get, task created (ok) on a post.
 export function outcome(
   http: number,
   body: unknown,
   id: string,
+  get = false,
 ): { lines: string[]; exit: number } {
   const show = `full response: dfs store show ${id} --full`;
   const owner = 'the account owner must act: check credentials, balance and limits';
@@ -134,14 +138,22 @@ export function outcome(
     return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${remedy}`], exit: 1 };
   }
   const tasks = (Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
-  const failed = tasks.filter((t) => !isOk(t.status_code));
-  const lines = failed.map(
-    (t) =>
-      `dfs: task ${t.id} failed ${t.status_code} ${t.status_message}${t.status_code === 40103 ? ` — ${FRESH}` : ''}`,
-  );
+  const waiting = (t: Record<string, unknown>) =>
+    typeof t.status_code === 'number' &&
+    NOT_READY.has(t.status_code) &&
+    (get || t.status_code !== 20100);
+  const pending = tasks.filter(waiting);
+  const failed = tasks.filter((t) => !waiting(t) && !isOk(t.status_code));
+  const lines = [
+    ...failed.map(
+      (t) =>
+        `dfs: task ${t.id} failed ${t.status_code} ${t.status_message}${t.status_code === 40103 ? ` — ${FRESH}` : ''}`,
+    ),
+    ...pending.map((t) => `dfs: task ${t.id} pending ${t.status_code}`),
+  ];
   if (failed.some((t) => isAccount(http, t.status_code))) return { lines, exit: 2 };
   if (failed.length > 0 && failed.length === tasks.length) return { lines, exit: 1 };
-  return { lines, exit: failed.length > 0 ? 6 : 0 };
+  return { lines, exit: failed.length + pending.length > 0 ? 6 : 0 };
 }
 
 export const USER_DATA = '/v3/appendix/user_data';
@@ -171,7 +183,9 @@ export function reusable(io: Io, planned: Plan, sandbox: boolean): Row | undefin
   const db = openStore(io.env);
   try {
     return reuseRows(db, reuseKey(planned, sandbox), since).find(
-      (r) => outcome(r.http_status, JSON.parse(r.body as string), r.id).exit === 0,
+      (r) =>
+        outcome(r.http_status, JSON.parse(r.body as string), r.id, planned.method === 'GET')
+          .exit === 0,
     );
   } finally {
     db.close();
@@ -450,7 +464,7 @@ export async function sendPlanned(
       warnings.push(`dfs: warning: task rows not saved (${messageOf(e)})`);
     }
   }
-  const { lines, exit } = outcome(res.status, parsed, id);
+  const { lines, exit } = outcome(res.status, parsed, id, ep.method === 'get');
   const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;
   const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est.usd ?? '?'} saved=${id}`;
   return { parsed, id, full, cost: row.cost, lines: [status, ...warnings, ...lines], exit };

@@ -8,6 +8,7 @@ import {
   exchange,
   isAccount,
   isOk,
+  NOT_READY,
   outcome,
   priceTree,
   readBody,
@@ -40,7 +41,6 @@ const POST_MAX = 100;
 const WAIT = 90; // s
 const FIRST_POLL = 5000; // ms; doubles up to LAST_POLL
 const LAST_POLL = 30_000;
-const NOT_READY = new Set([20100, 40601, 40602]); // created, handed, in progress (exit table)
 const EXPIRED = 40403;
 
 export const runUsage = (level: Level): string => {
