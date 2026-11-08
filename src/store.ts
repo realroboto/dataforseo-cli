@@ -90,7 +90,7 @@ export const configDir = (env: NodeJS.ProcessEnv): string =>
 export const storeFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'store.db');
 const unsavedDir = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'unsaved');
 
-const privateDir = (dir: string): void => {
+export const privateDir = (dir: string): void => {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
 };

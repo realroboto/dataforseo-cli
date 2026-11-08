@@ -1,19 +1,25 @@
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { type Io, run } from '../../src/run.ts';
 
+const NOW = () => Date.parse('2026-11-07T12:00:00Z');
+
 // Runs the CLI in-process with in-memory streams, a temp DFS_CONFIG_DIR and a fixed clock;
-// any network call fails loudly.
-export async function dfs(argv: string[], io: Partial<Io> = {}) {
+// any network call fails loudly. The daily spec check counts as just done unless `specCheck`.
+export async function dfs(argv: string[], io: Partial<Io> = {}, { specCheck = false } = {}) {
   let stdout = '';
   let stderr = '';
+  const env = io.env ?? { DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-run-')) };
+  const state = env.DFS_CONFIG_DIR && join(env.DFS_CONFIG_DIR, 'spec-check.json');
+  if (!specCheck && state && existsSync(env.DFS_CONFIG_DIR as string)) {
+    writeFileSync(state, JSON.stringify({ checked: (io.now ?? NOW)() }));
+  }
   const code = await run(argv, {
-    env: { DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-run-')) },
     fetch: () => Promise.reject(new Error('unexpected network call')),
     sleep: async () => {}, // retry backoff never waits in tests
-    now: () => Date.parse('2026-11-07T12:00:00Z'),
+    now: NOW,
     stdin: Readable.from([]),
     stdout: {
       write: (s: string) => {
@@ -26,6 +32,7 @@ export async function dfs(argv: string[], io: Partial<Io> = {}) {
       },
     },
     ...io,
+    env,
   });
   return { code, stdout, stderr };
 }

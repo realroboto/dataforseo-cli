@@ -10,6 +10,8 @@ import { promisify } from 'node:util';
 
 const BIN = fileURLToPath(new URL('../bin/dfs.ts', import.meta.url));
 const env = { ...process.env, DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-cli-')) };
+// The daily spec check counts as done today: the bin never reaches the network in CI.
+writeFileSync(join(env.DFS_CONFIG_DIR, 'spec-check.json'), JSON.stringify({ checked: Date.now() }));
 
 // Bin wiring only (seam 2); every CLI behavior is tested in-process in run.test.ts.
 test('--version shows the snapshot SHA and date from the bin', async () => {

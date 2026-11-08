@@ -1,12 +1,15 @@
-// Catalog: the spec as a command tree (docs/spec/modules/catalog.md). This build opens the
-// committed Spec snapshot with the vendor overlay; the daily check and cache come later.
-import { readFileSync } from 'node:fs';
+// Catalog: the spec as a command tree (docs/spec/modules/catalog.md). Opens the newest spec,
+// cache or committed Spec snapshot, with the vendor overlay; the daily check swaps the cache.
+import { randomUUID } from 'node:crypto';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { DfsError } from './errors.ts';
+import pkg from '../package.json' with { type: 'json' };
+import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { applyOverlay } from './overlay.ts';
 import type { Schema, Schemas } from './schema.ts';
+import { configDir, privateDir } from './store.ts';
 
 export const SPEC_DIR = join(import.meta.dirname, '..', 'spec');
 
@@ -147,8 +150,127 @@ export function readSnapshot(): Snapshot {
 export const readOverlay = (): unknown =>
   parse(readFileSync(join(SPEC_DIR, 'overlay.yaml'), 'utf8'));
 
-export function openCatalog() {
-  const { sha, date, spec } = readSnapshot();
+const REPO = 'dataforseo/OpenApiDocumentation';
+const FILE = 'openapi_specification.yaml';
+export const COMMITS_URL = `https://api.github.com/repos/${REPO}/commits?path=${FILE}&sha=master&per_page=1`;
+// By SHA, not master: no race between the two reads.
+export const rawUrl = (sha: string): string =>
+  `https://raw.githubusercontent.com/${REPO}/${sha}/${FILE}`;
+
+// SHA and committer date of the newest spec commit, from a commits API answer.
+export function newestCommit(commits: unknown): { sha: string; date: string } {
+  const last = Array.isArray(commits) ? commits[0] : undefined;
+  const commit = isRecord(last) && isRecord(last.commit) ? last.commit.committer : undefined;
+  const sha = isRecord(last) ? last.sha : undefined;
+  const date = isRecord(commit) ? commit.date : undefined;
+  if (typeof sha !== 'string' || typeof date !== 'string') {
+    throw new Error(`GitHub commits API: no commit for ${FILE}`);
+  }
+  return { sha, date };
+}
+
+const cacheFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'spec.json');
+const stateFile = (env: NodeJS.ProcessEnv): string => join(configDir(env), 'spec-check.json');
+
+const readJson = (file: string): unknown => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+};
+
+function writeAtomic(file: string, text: string): void {
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600, flag: 'wx', flush: true });
+  renameSync(tmp, file);
+}
+
+// The newest spec dfs has: the cache when its commit date is newer than the snapshot's.
+// No env (tests of the snapshot itself): the snapshot. A cache that does not read is absent.
+export function readNewest(env?: NodeJS.ProcessEnv): Snapshot {
+  const snapshot = readSnapshot();
+  const c = env && readJson(cacheFile(env));
+  const ok =
+    isRecord(c) &&
+    typeof c.sha === 'string' &&
+    typeof c.date === 'string' &&
+    isRecord(c.spec) &&
+    isRecord(c.spec.paths);
+  return ok && Date.parse(c.date as string) > Date.parse(snapshot.date)
+    ? (c as Snapshot)
+    : snapshot;
+}
+
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+type CheckState = { checked: number; etag?: string; failed?: boolean };
+type CheckIo = {
+  env: NodeJS.ProcessEnv;
+  fetch: (url: string, init?: RequestInit) => Promise<Response>;
+  stderr: { write(chunk: string): unknown };
+  now?: () => number;
+};
+
+async function get(io: CheckIo, url: string, headers: Record<string, string>) {
+  const res = await io.fetch(url, { headers: { 'user-agent': `dfs/${pkg.version}`, ...headers } });
+  if (!res.ok && res.status !== 304) throw new Error(`${url}: HTTP ${res.status}`);
+  return res;
+}
+
+// Daily spec check: at most once per 24 h, the commits API (ETag) gives the newest SHA; a new
+// SHA is fetched raw at that SHA, checked on the overlaid copy and swapped in as the cache.
+// A failure keeps the spec in use, warns once and is retried after 1 h.
+export async function dailyCheck(io: CheckIo): Promise<void> {
+  const now = (io.now ?? Date.now)();
+  const raw = readJson(stateFile(io.env));
+  const state: CheckState | undefined =
+    isRecord(raw) && typeof raw.checked === 'number' ? (raw as CheckState) : undefined;
+  const age = state ? now - state.checked : -1; // a future time (clock skew) counts as due
+  if (state && age >= 0 && age < (state.failed ? HOUR_MS : DAY_MS)) return;
+  const current = readNewest(io.env);
+  let next: CheckState;
+  try {
+    const res = await get(io, COMMITS_URL, {
+      accept: 'application/vnd.github+json',
+      ...(state?.etag ? { 'if-none-match': state.etag } : {}),
+    });
+    const etag = res.headers.get('etag') ?? undefined;
+    if (res.status !== 304) {
+      const { sha, date } = newestCommit(await res.json());
+      if (sha !== current.sha) {
+        const spec: unknown = parse(await (await get(io, rawUrl(sha), {})).text());
+        const overlaid = structuredClone(spec);
+        applyOverlay(overlaid, readOverlay());
+        const problems = checkSpec(overlaid, Object.keys(current.spec.paths).length);
+        if (problems.length > 0) {
+          const more = problems.length > 1 ? ` (+${problems.length - 1} more)` : '';
+          throw new Error(
+            `spec ${sha.slice(0, 7)} fails the structural check: ${problems[0]}${more}`,
+          );
+        }
+        privateDir(configDir(io.env));
+        writeAtomic(cacheFile(io.env), JSON.stringify({ sha, date, spec }));
+      }
+    }
+    next = { checked: now, etag: etag ?? state?.etag };
+  } catch (e) {
+    io.stderr.write(
+      `dfs: warning: spec check failed, keeping spec ${current.sha.slice(0, 7)}: ${messageOf(e).split('\n')[0]}; next try in 1 h\n`,
+    );
+    // The old ETag stays: a 304 must not hide a SHA that failed to load.
+    next = { checked: now, etag: state?.etag, failed: true };
+  }
+  try {
+    privateDir(configDir(io.env));
+    writeAtomic(stateFile(io.env), JSON.stringify(next));
+  } catch (e) {
+    io.stderr.write(`dfs: warning: cannot save the spec check time: ${messageOf(e)}\n`);
+  }
+}
+
+export function openCatalog(env?: NodeJS.ProcessEnv) {
+  const { sha, date, spec } = readNewest(env);
   applyOverlay(spec, readOverlay());
   const { root, endpoints } = buildTree(spec);
 
