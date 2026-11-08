@@ -18,7 +18,9 @@
     "spec:check": "node scripts/spec-check.ts",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir dist/spec && cp spec/snapshot.json spec/overlay.yaml dist/spec/",
     "pack:check": "node scripts/pack-check.ts",
-    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm pack:check"
+    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm spec:check && pnpm build && pnpm pack:check",
+    "test:sandbox": "node scripts/sandbox.ts",
+    "fixtures:record": "node scripts/fixtures-record.ts"
   },
   "files": [
     "dist/"

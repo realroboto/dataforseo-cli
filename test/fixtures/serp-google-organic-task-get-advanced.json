@@ -1,0 +1,123 @@
+{
+  "version": "0.1.20261103",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0 sec.",
+  "cost": 0,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "11080640-3076-0066-2000-122f82b6a1e0",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0 sec.",
+      "cost": 0,
+      "result_count": 1,
+      "path": ["v3", "serp", "google"],
+      "data": {
+        "api": "serp",
+        "function": "task_get",
+        "se": "google",
+        "se_type": "organic"
+      },
+      "result": [
+        {
+          "keyword": "pizza",
+          "type": "organic",
+          "se_domain": "google.com",
+          "location_code": 1006886,
+          "language_code": "en",
+          "check_url": "https://www.google.com/search?q=pizza&hl=en&gl=GB&ie=UTF-8&uule=w+CAIQIFISCXXeIa8LoNhHEZkq1d1aOpZS",
+          "datetime": "2026-11-07 20:18:35 +00:00",
+          "spell": null,
+          "refinement_chips": null,
+          "item_types": ["find_results_on", "local_pack", "organic"],
+          "se_results_count": 69,
+          "pages_count": 1,
+          "items_count": 17,
+          "items": [
+            {
+              "type": "find_results_on",
+              "rank_group": 1,
+              "rank_absolute": 1,
+              "page": 1,
+              "position": "left",
+              "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[1]/div[1]",
+              "items": [
+                {
+                  "type": "find_results_on_element",
+                  "title": "THE 10 BEST Pizza Places in Watford (Updated 2026)",
+                  "domain": "google.com",
+                  "url": "https://google.com/goto?url=CAESkwEBxCJF1wGm3ieoo-X4m7uTYdGpz71wjBbuy9-GQAeq3sKn94FQyTO45820IDmn0Z2RY1XCxXpeO1dtEHf_4embcn8BQLDwCFLY-nBiNoFUEyc_0brseAAxDtEdlVQGT2N3TUaZqYE_gCgMFUI2R73HFI3uyDT_H7JxYRJbfI7mqysEAvskzmAp1hRNH-nRqtV9aik",
+                  "source": "Tripadvisor"
+                },
+                {
+                  "type": "find_results_on_element",
+                  "title": "THE 10 BEST Pizza Takeaway in Maidstone 2026 - Order Pizza ...",
+                  "domain": "google.com",
+                  "url": "https://google.com/goto?url=CAESdQHEIkXXw9wSINxsBdhx3PtCzSWm64uWHz32Cc1ZFuViGEO-2tFPeN9nUcfgS2EdI7TXeS_IEPw17cpGLuEbpt4rHcfzxn-W6pLiKAEz03FHpDz_WFBKeB79Uf5CWIsIRFC3W0zqoLxzTh-b09-mTKiIjR_eKQ",
+                  "source": "ubereats"
+                },
+                {
+                  "type": "find_results_on_element",
+                  "title": "14 Pizza Restaurants near Leeds",
+                  "domain": "google.com",
+                  "url": "https://google.com/goto?url=CAEScQHEIkXXKLWL3Kz1u5gZLyPyOEv367ty84BXLC5wk59zAfD3K73NXXZCBdOPOqST9OymbXfi_tNYOg8Ui9XUHYWD0kNoRl5zFSlQoKO4f4gPlcR0SbLsnhswTTKqm2qksa_tYp_LY7nbw8i7pZz90xh6",
+                  "source": "squaremeal"
+                }
+              ],
+              "rectangle": null
+            },
+            {
+              "type": "local_pack",
+              "rank_group": 1,
+              "rank_absolute": 2,
+              "page": 1,
+              "position": "left",
+              "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[1]/div[1]/div[1]",
+              "title": "Crust Bros Pizza Covent Garden",
+              "description": "29 Bedford St \n\"Really light pizza dough and tasty toppings - very generous.\" \n",
+              "domain": "www.crustbros.co.uk",
+              "phone": "020 3034 0421",
+              "booking_url": null,
+              "url": "https://www.crustbros.co.uk/find-your-restaurant/covent-garden?utm_source=GMB&utm_medium=website_click&utm_campaign=crust-bros-covent-garden&utm_id=GMB",
+              "is_paid": false,
+              "rating": {
+                "rating_type": "Max5",
+                "value": 4.7,
+                "votes_count": 1600,
+                "rating_max": 5
+              },
+              "cid": "17820353906423378423",
+              "rectangle": null
+            },
+            {
+              "type": "local_pack",
+              "rank_group": 2,
+              "rank_absolute": 3,
+              "page": 1,
+              "position": "left",
+              "xpath": "/html[1]/body[1]/div[3]/div[1]/div[13]/div[1]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[3]/div[1]/div[1]",
+              "title": "Fatto a Mano Covent Garden",
+              "description": "30 St Martin's Ln \n\"... were perfectly distributed and did not overwhelm the pizza dough.\" \n",
+              "domain": "www.fattoamanopizza.com",
+              "phone": "020 3345 0003",
+              "booking_url": null,
+              "url": "https://www.fattoamanopizza.com/locations/covent-garden-london/",
+              "is_paid": false,
+              "rating": {
+                "rating_type": "Max5",
+                "value": 4.7,
+                "votes_count": 2100,
+                "rating_max": 5
+              },
+              "cid": "13311743875956888497",
+              "rectangle": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

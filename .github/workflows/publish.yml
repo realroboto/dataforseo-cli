@@ -1,0 +1,41 @@
+name: Publish
+
+# npm trusted publisher config names this file: renaming it breaks publish.
+on:
+  push:
+    tags: ["v*"]
+
+# OIDC only, no npm token secret. The version goes live after the owner approves it on npm.
+permissions:
+  contents: read
+  id-token: write # npm OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the guard needs origin/main
+          persist-credentials: false # no write token on disk for install scripts
+      - name: Guard tag against package version and main
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points to $GITHUB_SHA, which is not on main ($(git rev-parse origin/main))"
+            exit 1
+          fi
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false # no cache in release builds
+      - run: npm install --global "$(jq -r .packageManager package.json)"
+      - run: pnpm install --frozen-lockfile
+      # Runs the prepublishOnly gate first: typecheck, lint, test, spec:check, build, pack check.
+      - run: npm stage publish --provenance
