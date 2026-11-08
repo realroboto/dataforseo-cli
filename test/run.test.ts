@@ -110,6 +110,20 @@ test('every spec path (565) has a command whose --help exits 0 and shows its cal
   }
 });
 
+test('an unexpected exception exits 5 with its message on stderr', async () => {
+  let stderr = '';
+  const r = await dfs(['--help'], {
+    stdout: {
+      write: () => {
+        throw new Error('stdout closed');
+      },
+    },
+    stderr: { write: (s: string) => (stderr += s) },
+  });
+  assert.equal(r.code, 5);
+  assert.equal(stderr, 'dfs: stdout closed\n');
+});
+
 test('schema lists request fields, nested ones included', async () => {
   const { code, stdout } = await dfs(['schema', 'serp', 'google', 'organic', 'live', 'advanced']);
   assert.equal(code, 0);

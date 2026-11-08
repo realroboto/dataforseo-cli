@@ -139,7 +139,9 @@ export function outcome(
   }
   const tasks = (Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
   const waiting = (t: Record<string, unknown>) =>
-    NOT_READY.has(t.status_code as number) && (get || t.status_code !== 20100);
+    typeof t.status_code === 'number' &&
+    NOT_READY.has(t.status_code) &&
+    (get || t.status_code !== 20100);
   const pending = tasks.filter(waiting);
   const failed = tasks.filter((t) => !waiting(t) && !isOk(t.status_code));
   const lines = [
