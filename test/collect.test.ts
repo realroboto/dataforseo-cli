@@ -581,3 +581,38 @@ test('id_list reaches at most 180 days back', async () => {
   assert.equal((await dfs(['serp', '+collect'], { env: e, fetch, now })).code, 0);
   assert.equal(idListBodies(calls, 'serp')[0].datetime_from, '2026-05-11 12:00:00 +00:00');
 });
+
+// B5: a collect envelope failure goes through outcome, in +collect too.
+test('+collect: a collect envelope 40100 exits 2; another envelope failure keeps the task pending, exit 1', async () => {
+  const cases = [
+    {
+      res: () =>
+        json({
+          status_code: 40100,
+          status_message: 'You are not authorized to access this resource.',
+          cost: 0,
+          tasks_count: 0,
+          tasks: null,
+        }),
+      code: 2,
+      line: /^dfs: 40100 You are not authorized to access this resource\. — the account owner must act/m,
+    },
+    {
+      res: () => new Response('<html>502 Bad Gateway</html>', { status: 502 }),
+      code: 1,
+      line: /^dfs: task t1 not collected: HTTP 502 — not a JSON object: <html>502 Bad Gateway<\/html>$/m,
+    },
+  ];
+  for (const { res, code, line } of cases) {
+    const e = env();
+    const inner = api();
+    const { fetch } = fakeFetch((url, init) =>
+      url.includes('/task_get/') ? res() : inner.fetch(url, init),
+    );
+    await post(e, fetch);
+    const r = await dfs(['+collect'], { env: e, fetch, now: () => now() + 60_000 });
+    assert.equal(r.code, code, r.stderr);
+    assert.match(r.stderr, line);
+    assert.equal(query(e, "SELECT state FROM task WHERE id = 't1'")[0].state, 'pending');
+  }
+});
