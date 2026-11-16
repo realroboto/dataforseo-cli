@@ -255,3 +255,16 @@ test('--page-all input errors exit 3 with nothing sent', async () => {
   });
   assert.doesNotMatch(plain.stdout, /--page-all/);
 });
+
+test('--page-all: an invalid body exits 3 before the price tree loads; nothing sent (B9)', async () => {
+  // No stored price tree and a login: a refresh would send user_data before page 1.
+  const a = api(10, 'offset_token', 0.01);
+  const body = JSON.stringify({ ...TASK, keywords: 'pizza' });
+  const r = await dfs([...IDEAS, '--body', body, '--page-all'], { env: env(), fetch: a.fetch });
+  assert.equal(r.code, 3, r.stderr);
+  assert.match(r.stderr, /body\[0\]\.keywords: want array, got string/);
+  assert.deepEqual(
+    a.calls.map((c) => c.url),
+    [],
+  );
+});
