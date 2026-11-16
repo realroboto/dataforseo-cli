@@ -627,7 +627,7 @@ export const ruleFor = (specPath: string): Rule | undefined => BY_PATH.get(specP
 export type Estimate = {
   usd: number | null;
   basis: 'rule' | 'unknown' | 'unbounded';
-  warning?: string; // a node the price tree lacks, or a count or page field not a number
+  warning?: string; // a node the price tree lacks, or a count, page or extra field not a number
 };
 
 // B1 (pricing.md): absent → undefined, not a number → NaN. Not Number(): "" → 0, "0x10" → 16.
