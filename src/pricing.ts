@@ -630,9 +630,7 @@ export type Estimate = {
   warning?: string; // a node the price tree lacks, or a count or page field not a number
 };
 
-// Numeric body field (B1): a JSON number as itself, a decimal string (trimmed) as its number,
-// undefined or null → undefined (absent), any other value → NaN (unreadable). Not Number(): it
-// reads "" as 0 and "0x10" as 16.
+// B1 (pricing.md): absent → undefined, not a number → NaN. Not Number(): "" → 0, "0x10" → 16.
 export function readNumber(v: unknown): number | undefined {
   if (v === undefined || v === null) return undefined;
   if (typeof v === 'number') return v;
@@ -640,12 +638,15 @@ export function readNumber(v: unknown): number | undefined {
   return /^-?\d+(\.\d+)?$/.test(s) ? Number.parseFloat(s) : Number.NaN;
 }
 
-// The count or page field of a task that is set but unreadable; a count field may be an array.
+// The first field that makes the price unknown: a count field (unless an array) or a page field
+// that is not a finite number, or an extra at ±Infinity (0 × Infinity = NaN passes the guard).
 function unreadable(rule: Rule, task: Record<string, unknown>): string | undefined {
+  const finite = (f: string) => Number.isFinite(readNumber(task[f]) ?? 0);
   const c = rule.results?.field;
-  if (c !== undefined && !Array.isArray(task[c]) && Number.isNaN(readNumber(task[c]))) return c;
+  if (c !== undefined && !Array.isArray(task[c]) && !finite(c)) return c;
   const p = rule.pages?.field;
-  if (p !== undefined && Number.isNaN(readNumber(task[p]))) return p;
+  if (p !== undefined && !finite(p)) return p;
+  return rule.extras?.find((x) => Math.abs(readNumber(task[x.field]) ?? 0) === Infinity)?.field;
 }
 
 const pageFactor = (pages: Pages | undefined, task: Record<string, unknown>): number => {
@@ -750,8 +751,7 @@ export function estimate(
       if (!isSet(v) || (x.when && !x.when.test(String(v))) || (x.unless && isSet(task[x.unless]))) {
         continue;
       }
-      // A readable number counts its units; a flag (true, a pattern match) counts 1.
-      const n = readNumber(v) ?? 1;
+      const n = readNumber(v) ?? 1; // a flag (true, a pattern match) counts 1
       const units = Number.isNaN(n) ? 1 : Math.max(0, n);
       times *= x.times ?? 1;
       add += units * ((x.add ?? 0) * base + (x.usd ?? 0));

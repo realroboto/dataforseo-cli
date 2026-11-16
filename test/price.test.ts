@@ -573,26 +573,26 @@ test('per_result: limit, input arrays and date spans count the billed items', as
 test('--no-validate: count, page, priority and extra fields sent as numeric strings read as their numbers', async () => {
   const e = env();
   await loadPrices(e);
-  const nv = '--no-validate';
+  const loose = '--no-validate';
   const rk = 'dataforseo_labs google ranked_keywords live';
   const site = { ...US, target: 'example.com' };
   // 0.012 + 1000 × 0.00012, as for limit 1000.
-  assert.equal(await usd(e, rk, { ...site, limit: '1000' }, nv), 0.132);
-  assert.equal(await usd(e, rk, { ...site, limit: ' 5 ' }, nv), 0.0126);
-  assert.equal(await usd(e, rk, { ...site, limit: null }, nv), 0.024, 'null: API default 100');
+  assert.equal(await usd(e, rk, { ...site, limit: '1000' }, loose), 0.132);
+  assert.equal(await usd(e, rk, { ...site, limit: ' 5 ' }, loose), 0.0126);
+  assert.equal(await usd(e, rk, { ...site, limit: null }, loose), 0.024, 'null: API default 100');
   // Page fields: depth 15 bills two SERPs; max_crawl_pages counts crawled pages.
   const pizza = { ...US, keyword: 'pizza' };
   const organic = 'serp google organic live advanced';
-  assert.equal(await usd(e, organic, { ...pizza, depth: '15' }, nv), 0.0035);
+  assert.equal(await usd(e, organic, { ...pizza, depth: '15' }, loose), 0.0035);
   const crawl = { target: 'example.com', max_crawl_pages: '100' };
-  assert.equal(await usd(e, 'on_page task_post', crawl, nv), 0.015);
+  assert.equal(await usd(e, 'on_page task_post', crawl, loose), 0.015);
   const post = 'serp google organic task_post';
-  assert.equal(await usd(e, post, { ...pizza, priority: '2' }, nv), 0.0012);
+  assert.equal(await usd(e, post, { ...pizza, priority: '2' }, loose), 0.0012);
   // Extras: a numeric string sets the unit count; a boolean flag keeps count 1.
   const paa = { ...pizza, people_also_ask_click_depth: '4' };
-  assert.equal(await usd(e, organic, paa, nv), 0.0026);
+  assert.equal(await usd(e, organic, paa, loose), 0.0026);
   const flag = { ...crawl, load_resources: true };
-  assert.equal(await usd(e, 'on_page task_post', flag, nv), 0.045);
+  assert.equal(await usd(e, 'on_page task_post', flag, loose), 0.045);
 });
 
 test('--no-validate: an unreadable count or page field makes the price unknown; the guard refuses', async () => {
@@ -614,6 +614,30 @@ test('--no-validate: an unreadable count or page field makes the price unknown; 
       ),
       r.stderr,
     );
+  }
+  // A number that is not finite: on a count or page field, and on an extra (a flag counts 1, but
+  // 1e999 × a times-only extra was NaN, and the guard sent it).
+  const huge = `"${'9'.repeat(400)}"`;
+  for (const [words, body, field] of [
+    ['dataforseo_labs google ranked_keywords live', `{"target":"a.com","limit":${huge}}`, 'limit'],
+    ['serp google organic live advanced', '{"keyword":"pizza","depth":1e999}', 'depth'],
+    [
+      'serp baidu organic task_post',
+      '{"keyword":"pizza","get_website_url":1e999}',
+      'get_website_url',
+    ],
+    [
+      'serp google organic live advanced',
+      `{"keyword":"pizza","people_also_ask_click_depth":${huge}}`,
+      'people_also_ask_click_depth',
+    ],
+  ]) {
+    const argv = [...words.split(' '), '--body', body, '--no-validate', '--dry-run'];
+    const r = await dfs(argv, { env: e, now: at(NOON) });
+    const plan = JSON.parse(r.stdout);
+    assert.deepEqual(plan.estimate, { usd: null, basis: 'unknown', price_at: NOON }, body);
+    assert.equal(plan.guard, 'refuse', body);
+    assert.match(r.stderr, new RegExp(`: ${field} is not a number\\n$`), body);
   }
   // A page field: exit 4 and nothing sent; an explicit --max-cost sends.
   const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.002, tasks: [] }));
