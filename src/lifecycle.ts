@@ -34,7 +34,7 @@ import {
   type Task,
   updateTask,
 } from './store.ts';
-import { TIMEOUT } from './transport.ts';
+import { type Exchange, TIMEOUT } from './transport.ts';
 
 export type RunFlags = CallFlags & { wait?: string };
 
@@ -83,6 +83,23 @@ function chooseVariant(level: Level, word: string | undefined): string {
 const tasksOf = (body: unknown): Record<string, unknown>[] =>
   (isRecord(body) && Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
 const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+
+// The outcome of a response whose envelope failed (not a JSON object, not 20000, HTTP ≥ 300).
+function failure(x: { res: Exchange; parsed: unknown; row: { id: string } }) {
+  const p = x.parsed;
+  if (isRecord(p) && p.status_code === 20000 && x.res.status < 300) return undefined;
+  return outcome(x.res, p, x.row.id);
+}
+const text = (o: { lines: string[] }) => o.lines.join(' ').replace(/^dfs: /, '');
+
+// Prints each text once per command (budget); `key` defaults to the line.
+function onceEach(print: (line: string) => void) {
+  const said = new Set<string>();
+  return (line: string, key = line) => {
+    if (!said.has(key)) print(line);
+    said.add(key);
+  };
+}
 
 // Undefined when Transport gave up (exit 1: network, timeout, deadline); exit 2 and 5 still throw.
 async function answered<T>(request: Promise<T>, failed: (message: string) => void) {
@@ -190,8 +207,8 @@ export async function runTasks(
       err(
         `dfs: ${x.row.status_code ?? x.res.status} ${post.path} tasks=${isRecord(body) ? (body.tasks_count ?? 0) : 0} cost=$${x.row.cost ?? '?'} est=$${est ?? '?'} saved=${postId}`,
       );
-      if (!isRecord(body) || body.status_code !== 20000 || x.res.status >= 300) {
-        const o = outcome(x.res, body, postId);
+      const o = failure(x);
+      if (o) {
         o.lines.forEach(err);
         stop = o.exit;
       }
@@ -236,7 +253,7 @@ export async function runTasks(
   const pending = () => [...tasks.values()].filter((t) => t.state === 'pending');
   const missed = new Map<string, string>(); // pending tasks whose last collect failed: message
 
-  // Poll at 5, 10, 20, 30, 30 … s until every own task is done or the wait ends.
+  // Poll at 5, 10, 20, 30, 30 … s until every own task is done or the last poll ran.
   const deadline = now() + wait * 1000;
   // Requests end at the deadline. The last poll starts at it, so its requests share one Transport
   // timeout from its first request; else it could never answer.
@@ -246,10 +263,19 @@ export async function runTasks(
     closing ??= now() + TIMEOUT;
     return closing;
   };
-  const said = new Set<string>(); // tasks_ready failure texts already warned: one line each
+  const once = onceEach(err);
+  // An account failure: its lines once; no further poll, no last poll.
+  const account = (lines: string[]) => {
+    for (const l of lines) once(l);
+    stop = 2;
+  };
   let interval = FIRST_POLL;
-  while (stop === undefined && pending().length > 0 && now() < deadline) {
-    await sleep(Math.min(interval, deadline - now()));
+  // The last poll: the one whose tasks_ready ends at or after the deadline. It runs once, also
+  // after collects that passed the deadline (then with no sleep).
+  let last = false;
+  while (wait > 0 && !last && stop === undefined && pending().length > 0) {
+    const nap = Math.min(interval, deadline - now());
+    if (nap > 0) await sleep(nap);
     interval = Math.min(interval * 2, LAST_POLL);
     const planned = plan(catalog, ready, {}, undefined, { sandbox, validate: true });
     const x = await answered(
@@ -261,29 +287,33 @@ export async function runTasks(
         io,
         warn,
       ),
-      (m) => {
-        if (!said.has(m)) warn(`tasks_ready failed: ${m}`);
-        said.add(m);
-      },
+      (m) => once(`dfs: warning: tasks_ready failed: ${m}`),
     );
+    const o = x && failure(x);
+    if (o?.exit === 2) {
+      account(o.lines);
+      break;
+    }
+    // Other failures: polling goes on; one warning per text, whatever the response id.
+    if (o) once(`dfs: warning: tasks_ready failed: ${text(o)}`, text(o).replace(x.row.id, ''));
     // Only this run's ids: tasks_ready lists every uncollected task in its scope.
-    const ids = tasksOf(x?.parsed).flatMap((t) =>
+    const ids = tasksOf(o ? undefined : x?.parsed).flatMap((t) =>
       (Array.isArray(t.result) ? t.result : []).flatMap((r) => (isRecord(r) ? [r.id] : [])),
     );
-    // The last poll also asks for own ids not listed: tasks_ready lists at most 1000 tasks and
-    // never a postback_url task (vendor docs).
-    const mine =
-      now() >= deadline
-        ? pending()
-        : ids.flatMap((id) => {
-            const t = typeof id === 'string' ? tasks.get(id) : undefined;
-            return t?.state === 'pending' ? [t] : [];
-          });
+    // The last poll also asks for own ids not listed, also when its tasks_ready failed:
+    // tasks_ready lists at most 1000 tasks and never a postback_url task (vendor docs).
+    last = now() >= deadline;
+    const mine = last
+      ? pending()
+      : ids.flatMap((id) => {
+          const t = typeof id === 'string' ? tasks.get(id) : undefined;
+          return t?.state === 'pending' ? [t] : [];
+        });
     // In parallel: Transport caps the requests in flight.
     const end = requestEnd();
     await Promise.all(
       mine.map(async (t) =>
-        tasks.set(t.id, await collectTask(catalog, t, io, warn, messages, missed, end)),
+        tasks.set(t.id, await collectTask(catalog, t, io, warn, messages, missed, account, end)),
       ),
     );
   }
@@ -323,7 +353,8 @@ const param = (ep: Endpoint) => /\{(\w+)\}/.exec(ep.path)?.[1] ?? 'id';
 
 // One collect call through the task's stored variant; the task stays pending until its result is
 // ready (on_page: crawl finished). Returns the task with its new state, also saved. A failed
-// request leaves the task pending and in `missed`; an answer takes it out.
+// request or envelope leaves the task unchanged: an account failure goes to `account`; another
+// marks it in `missed`. Any other answer takes the mark out.
 async function collectTask(
   catalog: Catalog,
   t: Task,
@@ -331,6 +362,7 @@ async function collectTask(
   warn: (w: string) => void,
   messages: Map<string, string>,
   missed: Map<string, string>,
+  account: (lines: string[]) => void,
   deadline?: number,
 ): Promise<Task> {
   const level = collectLevel(catalog, t.path);
@@ -348,8 +380,11 @@ async function collectTask(
     (m) => missed.set(t.id, m),
   );
   if (!x) return t;
+  const o = failure(x);
   missed.delete(t.id);
-  if (!x.saved) return t; // free: the next collect fetches it again
+  if (o?.exit === 2) account(o.lines);
+  else if (o) missed.set(t.id, text(o));
+  if (o || !x.saved) return t; // free: the next collect fetches it again
   const [r] = tasksOf(x.parsed);
   const code = num(r?.status_code);
   const [result] = Array.isArray(r?.result) ? r.result : [];
@@ -517,6 +552,11 @@ export async function collectAll(
   const worst = (exit: number) => {
     if (exit === 2 || (exit === 1 && stop !== 2)) stop = exit;
   };
+  const once = onceEach(err);
+  const account = (lines: string[]) => {
+    for (const l of lines) once(l);
+    worst(2);
+  };
 
   const modules = module ? [module] : [...catalog.root.children.keys()].toSorted();
   for (const m of modules) {
@@ -633,7 +673,7 @@ export async function collectAll(
   }
   // In parallel: Transport caps the requests in flight.
   const tasks = await Promise.all(
-    pending.map((t) => collectTask(catalog, t, io, warn, messages, missed)),
+    pending.map((t) => collectTask(catalog, t, io, warn, messages, missed, account)),
   );
   const left = tasks.filter((t) => t.state === 'pending').length;
   report(

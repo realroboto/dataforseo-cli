@@ -9,8 +9,8 @@ import { dfs } from './helpers/io.ts';
 
 const LOGIN = { DATAFORSEO_LOGIN: 'me@example.com', DATAFORSEO_PASSWORD: 's3cret' };
 const env = () => ({ DFS_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'dfs-life-')), ...LOGIN });
-const json = (body: unknown) =>
-  new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const leaf = (cost: number) => ({ priority_normal: [{ cost_type: 'per_request', cost }] });
 const USER_DATA = {
   status_code: 20000,
@@ -117,6 +117,9 @@ function clock() {
       t += ms;
     },
     sleeps,
+    advance: (ms: number) => {
+      t += ms; // a slow answer
+    },
   };
 }
 
@@ -649,4 +652,163 @@ test('--wait takes a finite number of seconds, 0 or more', async () => {
     assert.equal(r.code, 3, w);
     assert.match(r.stderr, /want a number of seconds, 0 or more/);
   }
+});
+
+// B4: the t1 collect of the 5 s poll answers past the --wait 20 deadline; t2 is never listed
+// (a postback_url task). `readyDown`: the last tasks_ready fails.
+async function pastDeadline(readyDown: boolean) {
+  const c = clock();
+  const inner = api({ ready: () => ['t1'] });
+  let readies = 0;
+  let late = true;
+  const { fetch, calls } = fakeFetch((url, init) => {
+    if (url.endsWith('/tasks_ready') && ++readies > 1 && readyDown) {
+      throw new TypeError('fetch failed');
+    }
+    if (late && url.endsWith('/t1')) {
+      late = false;
+      c.advance(20_000);
+    }
+    return inner.fetch(url, init);
+  });
+  const r = await dfs([...ORGANIC, '--body', bodyOf(2), '--wait', '20'], {
+    env: env(),
+    fetch,
+    ...c,
+  });
+  return { r, paths: paths(calls).slice(1), sleeps: c.sleeps };
+}
+
+const READY = '/v3/serp/google/organic/tasks_ready';
+const GET = (id: string) => `/v3/serp/google/organic/task_get/advanced/${id}`;
+
+test('collects that pass the --wait deadline: the last poll still collects the unlisted own task', async () => {
+  const { r, paths, sleeps } = await pastDeadline(false);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(sleeps, [5000]);
+  assert.deepEqual(paths, [READY, GET('t1'), READY, GET('t2')]);
+  assert.match(r.stdout, /t1\.example[\s\S]*t2\.example/);
+});
+
+test('a failed last tasks_ready still runs the direct collects', async () => {
+  const { r, paths } = await pastDeadline(true);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(paths, [READY, GET('t1'), ...Array(5).fill(READY), GET('t2')]);
+  assert.match(r.stderr, /dfs: warning: tasks_ready failed: network error: fetch failed/);
+  assert.match(r.stdout, /t2\.example/);
+});
+
+const UNAUTHORIZED = {
+  status_code: 40100,
+  status_message: 'You are not authorized to access this resource.',
+  cost: 0,
+  tasks_count: 0,
+  tasks: null,
+};
+const OWNER = 'the account owner must act: check credentials, balance and limits';
+
+// B5: account class at once, no further poll and no last poll.
+test('a collect envelope 40100 exits 2: no further poll, no last poll', async () => {
+  const c = clock();
+  const inner = api();
+  const { fetch, calls } = fakeFetch((url, init) =>
+    url.endsWith('/t1') ? json(UNAUTHORIZED) : inner.fetch(url, init),
+  );
+  const e = env();
+  const r = await dfs([...ORGANIC, '--body', bodyOf(2), '--wait', '20'], { env: e, fetch, ...c });
+  assert.equal(r.code, 2, r.stderr);
+  assert.deepEqual(c.sleeps, [5000]);
+  assert.deepEqual(paths(calls).slice(1).toSorted(), [READY, GET('t1'), GET('t2')].toSorted());
+  assert.equal(r.stderr.split(`dfs: 40100 ${UNAUTHORIZED.status_message} — ${OWNER}\n`).length, 2);
+  assert.ok(
+    r.stderr.endsWith(
+      'dfs: task t1 pending 20100\ndfs: 6 1 tasks pending — collect them later: dfs +collect\n',
+    ),
+    r.stderr,
+  );
+  assert.match(r.stdout, /t2\.example/);
+  assert.deepEqual(
+    tasks(e).map((t) => [t.id, t.state]),
+    [
+      ['t1', 'pending'],
+      ['t2', 'collected'],
+    ],
+  );
+});
+
+test('tasks_ready: a 401 sends no further poll and exits 2; another envelope failure warns, polling goes on', async () => {
+  const c = clock();
+  const inner = api();
+  const { fetch, calls } = fakeFetch((url, init) =>
+    url.endsWith('/tasks_ready')
+      ? new Response('Unauthorized', { status: 401 })
+      : inner.fetch(url, init),
+  );
+  const r = await dfs([...ORGANIC, '--body', bodyOf(1)], { env: env(), fetch, ...c });
+  assert.equal(r.code, 2, r.stderr);
+  assert.deepEqual(c.sleeps, [5000]);
+  assert.deepEqual(paths(calls).slice(1), [READY]);
+  assert.ok(
+    r.stderr.endsWith(
+      `dfs: HTTP 401 — ${OWNER}\ndfs: task t1 pending 20100\ndfs: 6 1 tasks pending — collect them later: dfs +collect\n`,
+    ),
+    r.stderr,
+  );
+
+  // Not account: one warning per text, then the next poll lists t1.
+  let n = 0;
+  const other = api();
+  const flaky = fakeFetch((url, init) =>
+    url.endsWith('/tasks_ready') && ++n <= 2
+      ? json(
+          { status_code: 40400, status_message: 'Not Found.', cost: 0, tasks_count: 0, tasks: [] },
+          404,
+        )
+      : other.fetch(url, init),
+  );
+  const ok = await dfs([...ORGANIC, '--body', bodyOf(1)], {
+    env: env(),
+    fetch: flaky.fetch,
+    ...clock(),
+  });
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(
+    ok.stderr.match(
+      /dfs: warning: tasks_ready failed: 40400 Not Found\. — full response: dfs store show r_\w+ --full\n/g,
+    )?.length,
+    1,
+    ok.stderr,
+  );
+  assert.deepEqual(paths(flaky.calls).slice(1), [READY, READY, READY, GET('t1')]);
+});
+
+test('a collect envelope failure, not account, keeps the task pending: exit 1', async () => {
+  const inner = api();
+  const { fetch } = fakeFetch((url, init) =>
+    url.endsWith('/t2')
+      ? json(
+          { status_code: 40400, status_message: 'Not Found.', cost: 0, tasks_count: 0, tasks: [] },
+          404,
+        )
+      : inner.fetch(url, init),
+  );
+  const e = env();
+  const r = await dfs([...ORGANIC, '--body', bodyOf(2), '--wait', '5'], {
+    env: e,
+    fetch,
+    ...clock(),
+  });
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(
+    r.stderr,
+    /\ndfs: task t2 not collected: 40400 Not Found\. — full response: dfs store show r_\w+ --full\ndfs: 6 1 tasks pending after 5 s — collect them later: dfs \+collect\n$/,
+  );
+  assert.match(r.stdout, /t1\.example/);
+  assert.deepEqual(
+    tasks(e).map((t) => [t.id, t.state, t.status_code]),
+    [
+      ['t1', 'collected', 20000],
+      ['t2', 'pending', 20100],
+    ],
+  );
 });
