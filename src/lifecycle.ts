@@ -368,15 +368,15 @@ async function collectTask(
   if (o?.exit === 2) accountStop(o.lines);
   else if (o) missed.set(t.id, outcomeText(o));
   if (o || !x.saved) return t; // free: the next collect fetches it again
-  const c = collected(store, t, {
+  const update = collected(store, t, {
     id: x.row.id,
     path: ep.path,
     body: x.parsed,
     time: (io.now ?? Date.now)(),
   });
-  if (c.message !== undefined) messages.set(t.id, c.message);
-  if (c.warning) warn(c.warning);
-  return c.task;
+  if (update.message !== undefined) messages.set(t.id, update.message);
+  if (update.warning) warn(update.warning);
+  return update.task;
 }
 
 // stderr: task lines of tasks not collected, cut to the budget, then the remedy line. stdout: the
@@ -580,8 +580,8 @@ export async function collectAll(
       }
       if (results.length < ID_PAGE) break;
     }
-    const unsynced = ok ? setSync(store, m, new Date(now).toISOString()) : undefined;
-    if (unsynced) warn(unsynced);
+    const syncFailed = ok ? setSync(store, m, new Date(now).toISOString()) : undefined;
+    if (syncFailed) warn(syncFailed);
   }
 
   // Collect call of a lost id, mapped from its url. None: a warning; the ledger stores it failed.

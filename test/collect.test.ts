@@ -645,4 +645,21 @@ test('task row writes the Store refuses: one warning text on each path; the modu
     [{ id: 't1', state: 'pending' }],
   );
   assert.deepEqual(query(e, "SELECT module FROM sync WHERE module = 'serp'"), []);
+
+  // Task rows save again; the sync time write fails (Sync window).
+  const db2 = new DatabaseSync(join(e.DFS_CONFIG_DIR as string, 'store.db'));
+  db2.exec(`DROP TRIGGER refuse_INSERT; DROP TRIGGER refuse_UPDATE;
+    CREATE TRIGGER refuse_sync BEFORE INSERT ON sync BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+  db2.close();
+  const r2 = await dfs(['serp', '+collect'], { env: e, fetch, now: () => now() + 120_000 });
+  assert.equal(r2.code, 0, r2.stderr);
+  assert.equal(r2.stderr, `${warning}\n`);
+  assert.deepEqual(
+    query(e, 'SELECT id, state FROM task ORDER BY id').map((t) => ({ ...t })),
+    [
+      { id: 'sp1', state: 'collected' },
+      { id: 't1', state: 'collected' },
+    ],
+  );
+  assert.deepEqual(query(e, "SELECT module FROM sync WHERE module = 'serp'"), []);
 });
