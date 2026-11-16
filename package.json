@@ -1,6 +1,6 @@
 {
   "name": "@reallroboto/dfs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent-first CLI for the whole DataForSEO API, generated from the official OpenAPI spec, with a cost guard and a local store.",
   "type": "module",
   "bin": {
