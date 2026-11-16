@@ -55,6 +55,21 @@ Paid DataForSEO calls are charged per call from a prepaid balance, with no subsc
 - Default stdout is a size-bounded **Compact output** (G:27). The rest stays one command away in the Store (28:135–141).
 - dfs checks the spec once a day at runtime and also ships a **Spec snapshot**, so it never runs without a spec (34:87–91). A weekly **Drift check** detects upstream change (34:100–107).
 
+## Module map
 
+Agent design after gapi's Catalog → Planner → Transport (r22:20; gapi SPEC:113). Each module is deep: small interface, behaviour inside. Reason: gapi proves the split, and tests reach every module through one seam (Testing Decisions). Module docs: [Modules](/spec/modules/index.md). Terms: `GLOSSARY.md` (repo root).
 
-Agent design after gapi's Catalog → Planner → Transport (r22:20; gapi SPEC:113). Each module is deep: small interface, behaviour inside. Reason: gapi proves the split, and tests reach every module through one seam (Testing Decisions).
+Call path (epic #32: one module owns each rule):
+
+1. [Catalog](/spec/modules/catalog.md): command words resolve to an endpoint.
+2. [Planner](/spec/modules/planner.md): `--body` and flags become a call plan, or exit 3.
+3. [Dispatch](/spec/modules/dispatch.md): Reuse check, estimate and cost guard ([Pricing](/spec/modules/pricing.md)), send ([Transport](/spec/modules/transport.md)), save ([Store](/spec/modules/store.md)), task rows, outcome. Fetch free sends free requests.
+4. [Render](/spec/modules/render.md): Compact output, outcome and the task exit rule. Its Output owns the budget, the stderr lines and the exit class.
+
+Shared by the steps:
+
+- [Envelope](/spec/modules/envelope.md): reads every response body: tasks, results, items in one numbering, exit-table code sets.
+- [Task ledger](/spec/modules/ledger.md): task rows, task state, cost rule and the `id_list` sync window. Callers: Dispatch, Lifecycle.
+- Store handle ([Store](/spec/modules/store.md)): one Store connection per command, opened on first use, closed by `run()`.
+
+Command modules over Dispatch: plain call, `--page-all`, [Lifecycle](/spec/modules/lifecycle.md) (`+run`, `+collect`). `store` commands use the Store handle and Output only.
