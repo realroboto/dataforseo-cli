@@ -183,6 +183,43 @@ test('store search finds items with diacritics folded; --path and --since filter
   assert.match(shown.stdout, /^\{"dfs":"task",.*\n\{"type":"organic","title":"other",/);
 });
 
+test('store search and --from number items as Compact output does (results with and without items)', async () => {
+  const e = env();
+  const body = envelope([
+    {
+      id: 'ta',
+      status_code: 20000,
+      cost: 0,
+      result: [
+        { keyword: 'k', items: [{ title: 'alpha' }, { title: 'bravo' }] },
+        { keyword: 'k', items: [] },
+        { keyword: 'k', items: [{ title: 'charlie' }] },
+      ],
+    },
+    { id: 'tb', status_code: 20000, cost: 0, result: [{ title: 'delta' }, { title: 'echo' }] },
+  ]);
+  const { fetch } = fakeFetch((url) => json(url.endsWith('/user_data') ? USER_DATA : body));
+  const r = await dfs([...LIVE, '--body', '{"keyword":"k"}'], { env: e, fetch });
+  assert.equal(r.code, 0, r.stderr);
+  // Compact output numbers items 1, 2, …: every line that dfs did not make.
+  const items = lines(r.stdout).filter((l) => !('dfs' in l));
+  const words = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
+  assert.deepEqual(
+    items.map((i) => i.title),
+    words,
+  );
+  for (const [k, word] of words.entries()) {
+    const [hit, ...rest] = lines((await dfs(['store', 'search', word], { env: e })).stdout);
+    assert.deepEqual([hit.item, rest.length], [k + 1, 0], word);
+    const shown = await dfs(hit.more.split(' ').slice(1), { env: e });
+    assert.deepEqual(
+      lines(shown.stdout).find((l) => !('dfs' in l)),
+      items[k],
+      word,
+    );
+  }
+});
+
 test('store search, list and spend usage faults exit 3', async () => {
   const e = env();
   for (const argv of [

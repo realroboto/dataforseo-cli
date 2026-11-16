@@ -6,9 +6,6 @@ import {
   type CallFlags,
   ceilingOf,
   exchange,
-  isAccount,
-  isOk,
-  NOT_READY,
   outcome,
   priceTree,
   readBody,
@@ -16,6 +13,16 @@ import {
   reuseRow,
 } from './call.ts';
 import { type Catalog, collectPaths, type Endpoint, isLive, type Level } from './catalog.ts';
+import {
+  firstResult,
+  isAccount,
+  isExpired,
+  isNotReady,
+  isOk,
+  resultsOf,
+  succeeded,
+  tasksOf,
+} from './envelope.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { type Plan, plan } from './planner.ts';
@@ -42,7 +49,6 @@ const POST_MAX = 100;
 const WAIT = 90; // s
 const FIRST_POLL = 5000; // ms; doubles up to LAST_POLL
 const LAST_POLL = 30_000;
-const EXPIRED = 40403;
 
 export const runUsage = (level: Level): string => {
   const variants = [...collectPaths(level).keys()].filter(Boolean);
@@ -80,15 +86,12 @@ function chooseVariant(level: Level, word: string | undefined): string {
   );
 }
 
-const tasksOf = (body: unknown): Record<string, unknown>[] =>
-  (isRecord(body) && Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
 const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
 // The outcome of a response whose envelope failed (not a JSON object, not 20000, HTTP ≥ 300).
 function envelopeFailure(x: { res: Exchange; parsed: unknown; row: { id: string } }) {
-  const p = x.parsed;
-  if (isRecord(p) && p.status_code === 20000 && x.res.status < 300) return undefined;
-  return outcome(x.res, p, x.row.id);
+  if (succeeded(x.res.status, x.parsed)) return undefined;
+  return outcome(x.res, x.parsed, x.row.id);
 }
 const outcomeText = (o: { lines: string[] }) => o.lines.join(' ').replace(/^dfs: /, '');
 
@@ -298,9 +301,7 @@ export async function runTasks(
     // Other failures: polling goes on. One warning per text; the key ignores the response id.
     if (o) readyFailed(outcomeText(o), outcomeText(o).replace(x.row.id, ''));
     // Only this run's ids: tasks_ready lists every uncollected task in its scope.
-    const ids = tasksOf(o ? undefined : x?.parsed).flatMap((t) =>
-      (Array.isArray(t.result) ? t.result : []).flatMap((r) => (isRecord(r) ? [r.id] : [])),
-    );
+    const ids = tasksOf(o ? undefined : x?.parsed).flatMap((t) => resultsOf(t).map((r) => r.id));
     // The last poll also asks for own ids not listed, also when its tasks_ready failed:
     // tasks_ready lists at most 1000 tasks and never a postback_url task (vendor docs).
     last = now() >= deadline;
@@ -391,12 +392,11 @@ async function collectTask(
   if (o || !x.saved) return t; // free: the next collect fetches it again
   const [r] = tasksOf(x.parsed);
   const code = num(r?.status_code);
-  const [result] = Array.isArray(r?.result) ? r.result : [];
   const crawled =
-    !ep.path.includes('/summary/') || (isRecord(result) && result.crawl_progress === 'finished');
+    !ep.path.includes('/summary/') || firstResult(x.parsed)?.crawl_progress === 'finished';
   let state: Task['state'] = 'pending';
-  if (code === null || NOT_READY.has(code)) state = 'pending';
-  else if (code === EXPIRED) state = 'expired';
+  if (code === null || isNotReady(code, true)) state = 'pending';
+  else if (isExpired(code)) state = 'expired';
   else if (!isOk(code)) state = 'failed';
   else if (crawled) state = 'collected';
   if (typeof r?.status_message === 'string') messages.set(t.id, r.status_message);
@@ -615,7 +615,7 @@ export async function collectAll(
         ok = false;
         break;
       }
-      const results = (Array.isArray(t?.result) ? t.result : []).filter(isRecord);
+      const results = resultsOf(t);
       recover(results, x.row.id);
       if (results.length < ID_PAGE) break;
     }

@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { text } from 'node:stream/consumers';
 import pkg from '../package.json' with { type: 'json' };
 import type { Catalog, Endpoint } from './catalog.ts';
+import { firstResult, isAccount, isNotReady, isOk, succeeded, tasksOf } from './envelope.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { pageAll, pagingOf } from './pages.ts';
@@ -25,16 +26,6 @@ import {
   writePrice,
 } from './store.ts';
 import { authHeader, type Exchange, send } from './transport.ts';
-
-// Exit table (docs/spec/exit-codes-flags.md): account codes exit 2; warnings that still exit 0.
-const ACCOUNT = new Set([40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207, 40210]);
-const OK_WARNING = new Set([40106, 40102, 40007]);
-export const isAccount = (http: number, code: unknown) =>
-  http === 401 || http === 402 || (typeof code === 'number' && ACCOUNT.has(code));
-// Not ready (exit table): 20100 on a get, 40601 handed, 40602 in queue.
-export const NOT_READY = new Set([20100, 40601, 40602]);
-export const isOk = (code: unknown) =>
-  typeof code === 'number' && (Math.floor(code / 10_000) === 2 || OK_WARNING.has(code));
 
 export type CallFlags = {
   body?: string;
@@ -87,22 +78,18 @@ function parseJson(s: string): unknown {
 }
 
 // The login is never stored (store.md, login redaction), and save before print would store it.
-// SQLite json_remove keeps the other values as the API wrote them, number digits included.
-// Also deletes `login` from `body`, so the Compact output never shows it.
-function redactLogin(text: string, body: unknown): string {
-  const paths: string[] = [];
-  const tasks = isRecord(body) && Array.isArray(body.tasks) ? body.tasks : [];
-  for (const [i, t] of tasks.entries()) {
-    for (const [j, r] of (isRecord(t) && Array.isArray(t.result) ? t.result : []).entries()) {
-      if (isRecord(r) && 'login' in r) {
-        delete r.login;
-        paths.push(`$.tasks[${i}].result[${j}].login`);
-      }
-    }
-  }
-  if (paths.length === 0) return text;
+// Removes every `tasks[i].result[j].login` from the JSON text; SQLite json_remove keeps the other
+// values as the API wrote them, number digits included.
+const LOGIN = /^\$\.tasks\[\d+\]\.result\[\d+\]\.login$/;
+function redactLogin(text: string): string {
   const db = new DatabaseSync(':memory:');
   try {
+    const paths = db
+      .prepare("SELECT fullkey FROM json_tree(?) WHERE key = 'login'")
+      .all(text)
+      .map((r) => String(r.fullkey))
+      .filter((k) => LOGIN.test(k));
+    if (paths.length === 0) return text;
     const marks = paths.map(() => '?').join(', ');
     const { j } = db.prepare(`SELECT json_remove(?, ${marks}) AS j`).get(text, ...paths) as {
       j: string;
@@ -140,15 +127,12 @@ export function outcome(
   if (isAccount(http, body.status_code)) {
     return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${owner}`], exit: 2 };
   }
-  if (body.status_code !== 20000 || http >= 300) {
+  if (!succeeded(http, body)) {
     const remedy = body.status_code === 40103 ? FRESH : show;
     return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${remedy}`], exit: 1 };
   }
-  const tasks = (Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
-  const waiting = (t: Record<string, unknown>) =>
-    typeof t.status_code === 'number' &&
-    NOT_READY.has(t.status_code) &&
-    (get || t.status_code !== 20100);
+  const tasks = tasksOf(body);
+  const waiting = (t: Record<string, unknown>) => isNotReady(t.status_code, get);
   const pending = tasks.filter(waiting);
   const failed = tasks.filter((t) => !waiting(t) && !isOk(t.status_code));
   const lines = [
@@ -225,14 +209,6 @@ export function ceilingOf(flags: CallFlags, io: Io): { ceiling: number; explicit
   return { ceiling, explicit: explicit !== undefined };
 }
 
-// The `price` node of a user_data response with envelope 20000.
-function priceNode(body: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(body) || body.status_code !== 20000 || !Array.isArray(body.tasks)) return undefined;
-  const [task] = body.tasks;
-  const [result] = isRecord(task) && Array.isArray(task.result) ? task.result : [];
-  return isRecord(result) && isRecord(result.price) ? result.price : undefined;
-}
-
 // One HTTP exchange, saved to the Store before anything prints. A good non-sandbox user_data
 // response also writes the price tree (pricing.md); sandbox prices are dummy data.
 export async function exchange(
@@ -255,9 +231,10 @@ export async function exchange(
     deadline: opts.deadline,
   });
 
-  const parsed = parseJson(res.text);
-  const kept =
-    parsed !== undefined && ep.path === USER_DATA ? redactLogin(res.text, parsed) : res.text;
+  const raw = parseJson(res.text);
+  const kept = raw !== undefined && ep.path === USER_DATA ? redactLogin(res.text) : res.text;
+  // The Compact output never shows the login either.
+  const parsed = kept === res.text ? raw : JSON.parse(kept);
   const envelope = isRecord(parsed) ? parsed : {};
   const row: Row = {
     id: `r_${randomBytes(5).toString('hex')}`,
@@ -278,8 +255,12 @@ export async function exchange(
     reuse_key: reuseKey(planned, opts.sandbox),
   };
   const saved = save(io.env, row, warn);
-  const tree = ep.path === USER_DATA && !opts.sandbox && res.status < 300 && priceNode(parsed);
-  const price = tree ? { at: row.time, tree } : undefined;
+  // The `price` node of a successful user_data response.
+  const tree =
+    ep.path === USER_DATA && !opts.sandbox && succeeded(res.status, parsed)
+      ? firstResult(parsed)?.price
+      : undefined;
+  const price = isRecord(tree) ? { at: row.time, tree } : undefined;
   if (price) {
     try {
       const db = openStore(io.env);
@@ -443,8 +424,7 @@ export async function sendPlanned(
   if (!isFree(ep.path)) {
     const taskPost = ep.path.endsWith('/task_post');
     const now = new Date((io.now ?? Date.now)()).toISOString();
-    const tasks = isRecord(parsed) && Array.isArray(parsed.tasks) ? parsed.tasks : [];
-    const rows: Task[] = tasks.filter(isRecord).flatMap((t) =>
+    const rows: Task[] = tasksOf(parsed).flatMap((t) =>
       typeof t.id === 'string'
         ? [
             {

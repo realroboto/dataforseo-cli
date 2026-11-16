@@ -13,6 +13,7 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
+import { items } from './envelope.ts';
 import { messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 
@@ -150,18 +151,6 @@ function inTransaction(db: DatabaseSync, f: () => void): void {
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
-  }
-}
-
-// Items in the numbering of Compact output (render.ts `units`, `store show --from`).
-function* items(body: unknown): Generator<unknown> {
-  const tasks = isRecord(body) && Array.isArray(body.tasks) ? body.tasks : [];
-  for (const t of tasks) {
-    if (!isRecord(t)) continue;
-    for (const r of Array.isArray(t.result) ? t.result : []) {
-      if (isRecord(r) && Array.isArray(r.items)) yield* r.items;
-      else yield r;
-    }
   }
 }
 
