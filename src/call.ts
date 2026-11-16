@@ -130,7 +130,11 @@ export function outcome(
   if (!isRecord(body)) {
     if (isAccount(http, undefined)) return { lines: [`dfs: HTTP ${http} — ${owner}`], exit: 2 };
     // Such a body has no items, and HTML has no stored body: the line carries an excerpt.
-    const excerpt = res.text.replace(/\s+/g, ' ').trim().slice(0, 200);
+    // Control characters (a terminal escape in a proxy page) collapse like whitespace.
+    const excerpt = res.text
+      .replace(/[\s\p{Cc}]+/gu, ' ')
+      .trim()
+      .slice(0, 200);
     return { lines: [`dfs: HTTP ${http} — not a JSON object: ${excerpt}`], exit: 1 };
   }
   if (isAccount(http, body.status_code)) {

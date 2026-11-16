@@ -357,8 +357,8 @@ test('exit 0, 1, 2 and 6 follow the exit table; every response is saved', async 
 });
 
 test('a body that is not a JSON object shows its HTTP status and an excerpt; 401 keeps the owner remedy', async () => {
-  const page = `<html>\n  <head><title>502 Bad Gateway</title></head>\n  <body>${'x'.repeat(300)}</body>\n</html>`;
-  // Whitespace runs read as one space; the excerpt stops after 200 characters (57 + 143).
+  const page = `<html>\n\u001b  <head><title>502 Bad Gateway</title></head>\n  <body>${'x'.repeat(300)}</body>\n</html>`;
+  // Whitespace and control runs read as one space; the excerpt stops after 200 characters (57 + 143).
   const excerpt = `<html> <head><title>502 Bad Gateway</title></head> <body>${'x'.repeat(143)}`;
   const owner = 'the account owner must act: check credentials, balance and limits';
   const cases: [string, () => Response, number, string][] = [
