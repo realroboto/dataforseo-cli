@@ -327,6 +327,20 @@ test('a tree older than 24 h is refreshed first; a failed refresh warns and uses
   assert.equal(f.calls.length, 0);
 });
 
+test('a refresh answered by a body that is not a JSON object names the HTTP status', async () => {
+  const { fetch, calls } = fakeFetch(
+    () => new Response('<html>502 Bad Gateway</html>', { status: 502 }),
+  );
+  const r = await dfs([...LIVE, '--body', '{"keyword":"pizza"}'], { env: env(), fetch });
+  assert.equal(r.code, 4);
+  assert.match(
+    r.stderr,
+    /^dfs: warning: price tree refresh failed \(HTTP 502, not a JSON object\); no price tree\n/,
+  );
+  assert.doesNotMatch(r.stderr, /store show/);
+  assert.equal(calls.length, 1, 'user_data only: the paid call is refused');
+});
+
 test('--sandbox: estimate 0, guard not applied, no price refresh', async () => {
   const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.002, tasks: [] }));
   const body = '{"keyword":"pizza","depth":200}';

@@ -178,7 +178,7 @@ export async function runTasks(
         `dfs: ${x.row.status_code ?? x.res.status} ${post.path} tasks=${isRecord(body) ? (body.tasks_count ?? 0) : 0} cost=$${x.row.cost ?? '?'} est=$${est ?? '?'} saved=${postId}`,
       );
       if (!isRecord(body) || body.status_code !== 20000 || x.res.status >= 300) {
-        const o = outcome(x.res.status, body, postId);
+        const o = outcome(x.res, body, postId);
         o.lines.forEach(err);
         stop = o.exit;
       }
@@ -505,7 +505,7 @@ export async function collectAll(
         ok = false;
         break;
       }
-      const o = outcome(x.res.status, x.parsed, x.row.id);
+      const o = outcome(x.res, x.parsed, x.row.id);
       if (o.exit !== 0) {
         o.lines.forEach(err);
         worst(o.exit);

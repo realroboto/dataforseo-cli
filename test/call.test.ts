@@ -304,7 +304,7 @@ test('exit 0, 1, 2 and 6 follow the exit table; every response is saved', async 
       'HTTP 500',
       () => new Response('<html>oops</html>', { status: 500 }),
       1,
-      /^dfs: HTTP 500 — full/m,
+      /^dfs: HTTP 500 — not a JSON object: <html>oops<\/html>$/m,
     ],
     [
       'HTTP 401',
@@ -353,6 +353,46 @@ test('exit 0, 1, 2 and 6 follow the exit table; every response is saved', async 
     assert.match(r.stderr, stderr, name);
     assert.match(r.stderr, / saved=r_[0-9a-f]+\n/, name);
     assert.equal(rows(e.DFS_CONFIG_DIR).length, 1, name);
+  }
+});
+
+test('a body that is not a JSON object shows its HTTP status and an excerpt; 401 keeps the owner remedy', async () => {
+  const page = `<html>\n\u001b  <head><title>502 Bad Gateway</title></head>\n  <body>${'x'.repeat(300)}</body>\n</html>`;
+  // Whitespace and control runs read as one space; the excerpt stops after 200 characters (57 + 143).
+  const excerpt = `<html> <head><title>502 Bad Gateway</title></head> <body>${'x'.repeat(143)}`;
+  const owner = 'the account owner must act: check credentials, balance and limits';
+  const cases: [string, () => Response, number, string][] = [
+    [
+      'HTML 502',
+      () => new Response(page, { status: 502 }),
+      1,
+      `dfs: HTTP 502 — not a JSON object: ${excerpt}`,
+    ],
+    [
+      'JSON array',
+      () => new Response('[\n  {"id": 1},\n  {"id": 2}\n]'),
+      1,
+      'dfs: HTTP 200 — not a JSON object: [ {"id": 1}, {"id": 2} ]',
+    ],
+    [
+      'HTML 401',
+      () => new Response('<html><body>401 Authorization Required</body></html>', { status: 401 }),
+      2,
+      `dfs: HTTP 401 — ${owner}`,
+    ],
+  ];
+  for (const [name, res, exit, line] of cases) {
+    const { fetch } = fakeFetch(res);
+    const r = await dfs(['appendix', 'user_data'], { env: env(), fetch });
+    assert.equal(r.code, exit, `${name}: ${r.stderr}`);
+    const [status, ...rest] = r.stderr.split('\n');
+    assert.match(
+      status,
+      /^dfs: \d+ \/v3\/appendix\/user_data tasks=0 cost=\$\? est=\$0 saved=r_/,
+      name,
+    );
+    assert.deepEqual(rest, [line, ''], name);
+    assert.equal(r.stdout, '', name);
   }
 });
 

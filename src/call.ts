@@ -24,7 +24,7 @@ import {
   type Task,
   writePrice,
 } from './store.ts';
-import { authHeader, send } from './transport.ts';
+import { authHeader, type Exchange, send } from './transport.ts';
 
 // Exit table (docs/spec/exit-codes-flags.md): account codes exit 2; warnings that still exit 0.
 const ACCOUNT = new Set([40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207, 40210]);
@@ -119,16 +119,23 @@ const FRESH = 'to send it again, add --fresh';
 // stderr lines after the status line, and the exit code: worst class wins, 2 > 1 > 6 > 0.
 // `get`: 20100 is pending on a get, task created (ok) on a post.
 export function outcome(
-  http: number,
+  res: Exchange,
   body: unknown,
   id: string,
   get = false,
 ): { lines: string[]; exit: number } {
+  const http = res.status;
   const show = `full response: dfs store show ${id} --full`;
   const owner = 'the account owner must act: check credentials, balance and limits';
   if (!isRecord(body)) {
-    const exit = isAccount(http, undefined) ? 2 : 1;
-    return { lines: [`dfs: HTTP ${http} — ${exit === 2 ? owner : show}`], exit };
+    if (isAccount(http, undefined)) return { lines: [`dfs: HTTP ${http} — ${owner}`], exit: 2 };
+    // Such a body has no items, and HTML has no stored body: the line carries an excerpt.
+    // Control characters (a terminal escape in a proxy page) collapse like whitespace.
+    const excerpt = res.text
+      .replace(/[\s\p{Cc}]+/gu, ' ')
+      .trim()
+      .slice(0, 200);
+    return { lines: [`dfs: HTTP ${http} — not a JSON object: ${excerpt}`], exit: 1 };
   }
   if (isAccount(http, body.status_code)) {
     return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${owner}`], exit: 2 };
@@ -182,11 +189,13 @@ export function reusable(io: Io, planned: Plan, sandbox: boolean): Row | undefin
   const since = new Date((io.now ?? Date.now)() - REUSE_WINDOW).toISOString();
   const db = openStore(io.env);
   try {
-    return reuseRows(db, reuseKey(planned, sandbox), since).find(
-      (r) =>
-        outcome(r.http_status, JSON.parse(r.body as string), r.id, planned.method === 'GET')
-          .exit === 0,
-    );
+    return reuseRows(db, reuseKey(planned, sandbox), since).find((r) => {
+      const text = r.body as string;
+      return (
+        outcome({ status: r.http_status, text }, JSON.parse(text), r.id, planned.method === 'GET')
+          .exit === 0
+      );
+    });
   } finally {
     db.close();
   }
@@ -316,7 +325,9 @@ export async function priceTree(
       warn,
     );
     if (r.price) return r.price;
-    why = `${r.row.status_code ?? `HTTP ${r.res.status}`}, ${r.saved ? `see: dfs store show ${r.row.id}` : 'not saved'}`;
+    why = !isRecord(r.parsed)
+      ? `HTTP ${r.res.status}, not a JSON object`
+      : `${r.row.status_code ?? `HTTP ${r.res.status}`}, ${r.saved ? `see: dfs store show ${r.row.id}` : 'not saved'}`;
   } catch (e) {
     why = messageOf(e);
   }
@@ -464,7 +475,7 @@ export async function sendPlanned(
       warnings.push(`dfs: warning: task rows not saved (${messageOf(e)})`);
     }
   }
-  const { lines, exit } = outcome(res.status, parsed, id, ep.method === 'get');
+  const { lines, exit } = outcome(res, parsed, id, ep.method === 'get');
   const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;
   const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est.usd ?? '?'} saved=${id}`;
   return { parsed, id, full, cost: row.cost, lines: [status, ...warnings, ...lines], exit };
