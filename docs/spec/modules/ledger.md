@@ -14,7 +14,7 @@ status: stable
        - `task_post` path: `pending` when the task code is ok, else `failed`. `collected_at`, `collect_response` empty.
        - Other paid path: `collected`, else `failed` when the code is not ok. `collected_at` = time, `collect_response` = response id on every row.
        - A task already in the Store keeps its row (replayed post). Returns the tasks as stored, plus each task's `status_message`.
-       - Callers: [Dispatch](/spec/modules/dispatch.md) Send (plain call: sent paid responses only), `+run` post (sent and reused posts).
+       - Caller: [Dispatch](/spec/modules/dispatch.md) Send. Track off (plain call, `--page-all`): sent paid responses only. Track on (`+run` post): sent and reused posts.
      - `collected(store, task, response)`: new state of one task from its collect response (response id, endpoint path, body, time).
        - State rule, first match wins. Code sets: [Envelope](/spec/modules/envelope.md).
          1. Not ready, or no code → `pending`.
