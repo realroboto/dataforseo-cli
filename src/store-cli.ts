@@ -1,5 +1,6 @@
 // `dfs store …`: read the Store with no API call (docs/spec/modules/store.md, Commands).
-import { closeSync, openSync, rmSync } from 'node:fs';
+import { closeSync, openSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { DfsError, messageOf } from './errors.ts';
 import { BUDGET, compact } from './render.ts';
 import type { Io } from './run.ts';
@@ -81,7 +82,8 @@ export async function store(
     try {
       await backupStore(io.env, rest[0]);
     } catch (e) {
-      rmSync(rest[0], { force: true }); // created above, so a rerun can take the name again
+      // dfs created the file above: remove it so a rerun can take the name; the fault stays the error.
+      await rm(rest[0], { force: true }).catch(() => {});
       throw e;
     }
     io.stdout.write(`${rest[0]}\n`);

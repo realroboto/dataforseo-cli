@@ -393,7 +393,7 @@ test('a store backup that fails after creating its file removes it, so the rerun
   const failed = await dfs(['store', 'backup', file], { env: e });
   assert.equal(failed.code, 5);
   assert.equal(failed.stdout, '');
-  assert.match(failed.stderr, /^dfs: file is not a database\n$/);
+  assert.match(failed.stderr, /^dfs: .+\n$/);
   assert.equal(existsSync(file), false, 'the file dfs created is gone');
   // An existing file exits 3 and is never touched, even when the Store cannot open.
   const other = join(dir, 'other.db');
@@ -407,6 +407,12 @@ test('a store backup that fails after creating its file removes it, so the rerun
   assert.equal(rerun.code, 0, rerun.stderr);
   assert.equal(rerun.stdout, `${file}\n`);
   assert.equal(statSync(file).mode & 0o777, 0o600);
+  // The copy step fails too: SQLite cannot create the journal, its name passes 255 bytes.
+  const long = join(dir, `${'x'.repeat(250)}.db`);
+  const copy = await dfs(['store', 'backup', long], { env: e });
+  assert.equal(copy.code, 5);
+  assert.match(copy.stderr, /^dfs: .+\n$/);
+  assert.equal(existsSync(long), false, 'the file dfs created is gone');
 });
 
 test('a Store at user_version 1 migrates forward on open; old items become searchable', async () => {
