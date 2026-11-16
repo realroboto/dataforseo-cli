@@ -91,14 +91,18 @@ export class Dispatch {
     const base = { ep, plan: planned, free, reuse };
     if (reuse && !this.#flags['dry-run']) return { ...base, reuse }; // `reuse` again: type narrowing
     if (free) return { ...base, est: { usd: 0, basis: 'rule' } };
-    const rule = ruleFor(ep.path);
-    const price = rule && !rule.unbounded ? await this.#priceTree() : undefined;
-    const est = estimate(rule, planned.body ?? [], price?.tree, (this.#io.now ?? Date.now)());
+    const price = await this.price(ep);
+    const now = (this.#io.now ?? Date.now)();
+    const est = estimate(ruleFor(ep.path), planned.body ?? [], price?.tree, now);
     if (est.warning) this.#warn(est.warning);
     return { ...base, est, priceAt: price?.at };
   }
 
-  #priceTree(): Promise<Price | undefined> {
+  // The price tree when a paid estimate of `ep` needs one. --page-all loads it right after the
+  // page-1 plan, also when page 1 is reused (its order before epic #32).
+  async price(ep: Endpoint): Promise<Price | undefined> {
+    const rule = this.#flags.sandbox || isFree(ep.path) ? undefined : ruleFor(ep.path);
+    if (!rule || rule.unbounded) return undefined;
     const refresh = !this.#flags['dry-run'];
     this.#price ??= priceTree(this.#catalog, this.#io, this.#store, refresh, this.#warn);
     return this.#price;
@@ -168,8 +172,8 @@ export class Dispatch {
   }
 }
 
-// The steps of a call. The exported ones serve --page-all (#45) and Lifecycle (#46) until those run
-// over Dispatch; then they turn private.
+// The steps of a call. The exported ones serve Lifecycle (#46) until it runs over Dispatch; then
+// they turn private.
 
 function parseJson(s: string): unknown {
   try {
@@ -384,7 +388,7 @@ function taskRows(
 // One send of a planned call, saved before print. Writes the status line, then this call's
 // warnings, to `out`; returns the outcome lines and exit class for the caller. An unsaved response
 // prints in full and exits 5.
-export async function sendPlanned(
+async function sendPlanned(
   catalog: Catalog,
   ep: Endpoint,
   planned: Plan,
