@@ -1,5 +1,5 @@
 // `dfs store …`: read the Store with no API call (docs/spec/modules/store.md, Commands).
-import { closeSync, openSync } from 'node:fs';
+import { closeSync, openSync, rmSync } from 'node:fs';
 import { DfsError, messageOf } from './errors.ts';
 import { BUDGET, compact } from './render.ts';
 import type { Io } from './run.ts';
@@ -78,7 +78,12 @@ export async function store(
           : `store backup: ${messageOf(e)}`,
       );
     }
-    await backupStore(io.env, rest[0]);
+    try {
+      await backupStore(io.env, rest[0]);
+    } catch (e) {
+      rmSync(rest[0], { force: true }); // created above, so a rerun can take the name again
+      throw e;
+    }
     io.stdout.write(`${rest[0]}\n`);
     return;
   }
@@ -169,8 +174,10 @@ function since(age: string | undefined, io: Io): string | undefined {
   if (age === undefined) return undefined;
   const m = /^(\d+)([mhd])$/.exec(age);
   if (!m) throw new DfsError(3, `--since ${age}: want <n>m, <n>h or <n>d`);
-  const ms = Number(m[1]) * UNIT[m[2] as keyof typeof UNIT];
-  return new Date((io.now ?? Date.now)() - ms).toISOString();
+  const start = new Date((io.now ?? Date.now)() - Number(m[1]) * UNIT[m[2] as keyof typeof UNIT]);
+  // An age of Infinity ms, or a start past ±8.64e15 ms, gives an Invalid Date.
+  if (Number.isNaN(start.getTime())) throw new DfsError(3, `--since ${age}: too far back`);
+  return start.toISOString();
 }
 
 // `--path "serp google"`, `serp/google` or `/v3/serp/google` → `/v3/serp/google`.
