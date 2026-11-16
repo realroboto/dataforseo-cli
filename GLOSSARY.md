@@ -19,11 +19,11 @@ The `price` node of the `/v3/appendix/user_data` response, kept in the Store `pr
 _Avoid_: price list, rate card
 
 **free path**:
-A spec path on the Pricing free list: it never charges. Every other path is a paid path. A request on a free path is a free call; on a paid path, a paid call. Transport retries the two by different rules (ADR 0004).
+A spec path on the Pricing free list: it never charges. Every other path is a paid path. A call on a free path is a free call (free request); on a paid path, a paid call (paid request). Transport retries the two by different rules (ADR 0004).
 _Avoid_: free endpoint, cost-0 call
 
 **estimate**:
-The worst-case price of a call, from its body: price rule × price tree. Unknown when no price tree or rule node exists, or a count or page field is not a number. Unbounded when the cost settles after the run (LLM Responses).
+The worst-case price of a call, from its body: price rule × price tree. Unknown price: no price tree or rule node, or a count or page field that is not a number. Unbounded price: the cost settles after the run (LLM Responses).
 _Avoid_: quote, expected cost
 
 **cost guard**:
@@ -77,7 +77,7 @@ The stderr lines after the status line of one response, and its exit class. Rend
 _Avoid_: result (a result is in `tasks[].result[]`), verdict
 
 **exit class**:
-The exit code that one request or task set asks for. Output keeps the worst, 2 > 1 > 6 > 0. Exits 3, 4 and 5 end the command at once (ADR 0002).
+The exit code that one request or task set asks for. Output keeps the worst, 2 > 1 > 6 > 0. Exits 3, 4 and 5 end the command at once (`docs/spec/exit-codes-flags.md`; Render module).
 _Avoid_: exit status, error level
 
 ### Storage

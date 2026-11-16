@@ -63,12 +63,13 @@ Call path (epic #32: one module owns each rule):
 
 1. [Catalog](/spec/modules/catalog.md): command words resolve to an endpoint.
 2. [Planner](/spec/modules/planner.md): `--body` and flags become a call plan, or exit 3.
-3. [Dispatch](/spec/modules/dispatch.md): Reuse check, estimate and cost guard ([Pricing](/spec/modules/pricing.md)), send ([Transport](/spec/modules/transport.md)), save ([Store](/spec/modules/store.md)), task rows ([Task ledger](/spec/modules/ledger.md)), outcome. Fetch free sends free requests.
+3. [Dispatch](/spec/modules/dispatch.md): Reuse check, estimate and cost guard ([Pricing](/spec/modules/pricing.md)), send ([Transport](/spec/modules/transport.md)), save ([Store](/spec/modules/store.md)), task rows, outcome. Fetch free sends free requests.
 4. [Render](/spec/modules/render.md): Compact output, outcome and the task exit rule. Its Output owns the budget, the stderr lines and the exit class.
 
 Shared by the steps:
 
 - [Envelope](/spec/modules/envelope.md): reads every response body: tasks, results, items in one numbering, exit-table code sets.
+- [Task ledger](/spec/modules/ledger.md): task rows, task state, cost rule and the `id_list` sync window. Callers: Dispatch, Lifecycle.
 - Store handle ([Store](/spec/modules/store.md)): one Store connection per command, opened on first use, closed by `run()`.
 
 Command modules over Dispatch: plain call, `--page-all`, [Lifecycle](/spec/modules/lifecycle.md) (`+run`, `+collect`). `store` commands use the Store handle and Output only.
