@@ -706,6 +706,11 @@ const UNAUTHORIZED = {
   tasks: null,
 };
 const OWNER = 'the account owner must act: check credentials, balance and limits';
+const notFound = () =>
+  json(
+    { status_code: 40400, status_message: 'Not Found.', cost: 0, tasks_count: 0, tasks: [] },
+    404,
+  );
 
 // B5: account class at once, no further poll and no last poll.
 test('a collect envelope 40100 exits 2: no further poll, no last poll', async () => {
@@ -759,12 +764,7 @@ test('tasks_ready: a 401 sends no further poll and exits 2; another envelope fai
   let n = 0;
   const other = api();
   const flaky = fakeFetch((url, init) =>
-    url.endsWith('/tasks_ready') && ++n <= 2
-      ? json(
-          { status_code: 40400, status_message: 'Not Found.', cost: 0, tasks_count: 0, tasks: [] },
-          404,
-        )
-      : other.fetch(url, init),
+    url.endsWith('/tasks_ready') && ++n <= 2 ? notFound() : other.fetch(url, init),
   );
   const ok = await dfs([...ORGANIC, '--body', bodyOf(1)], {
     env: env(),
@@ -785,12 +785,7 @@ test('tasks_ready: a 401 sends no further poll and exits 2; another envelope fai
 test('a collect envelope failure, not account, keeps the task pending: exit 1', async () => {
   const inner = api();
   const { fetch } = fakeFetch((url, init) =>
-    url.endsWith('/t2')
-      ? json(
-          { status_code: 40400, status_message: 'Not Found.', cost: 0, tasks_count: 0, tasks: [] },
-          404,
-        )
-      : inner.fetch(url, init),
+    url.endsWith('/t2') ? notFound() : inner.fetch(url, init),
   );
   const e = env();
   const r = await dfs([...ORGANIC, '--body', bodyOf(2), '--wait', '5'], {
@@ -811,4 +806,17 @@ test('a collect envelope failure, not account, keeps the task pending: exit 1', 
       ['t2', 'pending', 20100],
     ],
   );
+});
+
+test('a collect envelope failure, then a success on a later poll: exit 0', async () => {
+  let n = 0;
+  const inner = api();
+  const { fetch } = fakeFetch((url, init) =>
+    url.endsWith('/t2') && ++n === 1 ? notFound() : inner.fetch(url, init),
+  );
+  const r = await dfs([...ORGANIC, '--body', bodyOf(2)], { env: env(), fetch, ...clock() });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(n, 2);
+  assert.match(r.stdout, /t2\.example/);
+  assert.doesNotMatch(r.stderr, /not collected/);
 });
