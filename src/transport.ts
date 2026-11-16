@@ -49,7 +49,8 @@ function retryable(status: number, text: string, free: boolean): boolean {
 
 const MINUTE = 60_000;
 const IN_FLIGHT = 10;
-const LIVE_TIMEOUT = 130_000;
+// The vendor's Live maximum; Standard calls answer faster, so it never cuts a good answer.
+const TIMEOUT = 130_000;
 type Pace = { until: number; open: number; queue: (() => void)[] };
 // One pace per fetch: a process has one; each test fake gets its own.
 const paces = new WeakMap<Fetch, Pace>();
@@ -65,7 +66,7 @@ async function slot(pace: Pace): Promise<() => void> {
 
 export async function send(
   { fetch, sleep = wait, now = Date.now }: { fetch: Fetch; sleep?: Sleep; now?: () => number },
-  req: { method: string; url: string; body?: string; auth: string; free: boolean; live: boolean },
+  req: { method: string; url: string; body?: string; auth: string; free: boolean },
 ): Promise<Exchange> {
   const headers: Record<string, string> = { authorization: req.auth };
   if (req.body !== undefined) headers['content-type'] = 'application/json';
@@ -79,11 +80,14 @@ export async function send(
     // After the slot: a response that came in while this request was queued may set `until`.
     const pause = pace.until - now();
     if (pause > 0) await sleep(pause);
-    const abort = req.live ? new AbortController() : undefined;
-    const timer =
-      abort && setTimeout(() => abort.abort(new Error('no answer in 130 s')), LIVE_TIMEOUT);
+    // setTimeout, not AbortSignal.timeout: tests drive it with mock timers.
+    const abort = new AbortController();
+    const timer = setTimeout(
+      () => abort.abort(new Error(`no answer in ${TIMEOUT / 1000} s`)),
+      TIMEOUT,
+    );
     try {
-      const init = { method: req.method, headers, body: req.body, signal: abort?.signal };
+      const init = { method: req.method, headers, body: req.body, signal: abort.signal };
       const r = await fetch(req.url, init);
       if (r.headers.get('x-ratelimit-remaining') === '0') {
         pace.until = (Math.floor(now() / MINUTE) + 1) * MINUTE;

@@ -83,7 +83,16 @@ const USER_DATA = envelope(20000, 0, [
     id: 'u1',
     status_code: 20000,
     cost: 0,
-    result: [{ price: { serp: { live: { advanced: { priority_normal: leaf } } } } }],
+    result: [
+      {
+        price: {
+          serp: {
+            live: { advanced: { priority_normal: leaf } },
+            task_post: { priority_normal: leaf },
+          },
+        },
+      },
+    ],
   },
 ]);
 const LIVE = ['serp', 'google', 'organic', 'live', 'advanced', '--body', '{"keyword":"pizza"}'];
@@ -181,24 +190,58 @@ test('at most 10 requests in flight per process; a queued request obeys the rate
   assert.deepEqual(waits, [40_000, 40_000], 'only the 2 queued requests wait');
 });
 
-test('Live: the client gives up after 130 s; other calls have no timeout', async (t) => {
+// Never answers until the timeout aborts it; a request with no timeout fails at once.
+function stall(init?: RequestInit): Promise<Response> {
+  const signal = init?.signal;
+  if (!signal) return Promise.reject(new Error('no timeout on this request'));
+  return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+}
+const STANDARD = ['serp', 'google', 'organic', 'task_post', '--body', '{"keyword":"pizza"}'];
+
+test('every request gives up after 130 s; a paid one (Live or Standard) exits 1, no retry', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const signals: (AbortSignal | null | undefined)[] = [];
-  const fetch = (url: string, init?: RequestInit) => {
-    signals.push(init?.signal);
-    if (url.endsWith('/user_data')) return Promise.resolve(json(USER_DATA));
-    return new Promise<Response>((_, reject) =>
-      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)),
+  for (const argv of [STANDARD, LIVE]) {
+    const { fetch, calls } = fakeFetch((url, init) =>
+      url.endsWith('/user_data') ? json(USER_DATA) : stall(init),
     );
+    const pending = dfs(argv, { env: env(), fetch });
+    while (calls.length < 2) await tick();
+    t.mock.timers.tick(129_999);
+    await tick();
+    assert.equal(calls[1]?.init?.signal?.aborted, false, argv[3]);
+    t.mock.timers.tick(1);
+    const r = await pending;
+    assert.equal(r.code, 1, r.stderr);
+    assert.equal(calls.length, 2, argv[3]);
+    assert.match(
+      r.stderr,
+      /connection lost after send: no answer in 130 s — money may be spent; dfs \+collect recovers it\n$/,
+    );
+  }
+});
+
+test('free call: no answer in 130 s retries on the transient schedule', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  // Drives `attempts` stalled requests to their timeout.
+  const timeOut = async (calls: unknown[], attempts: number) => {
+    for (let n = 1; n <= attempts; n++) {
+      while (calls.length < n) await tick();
+      t.mock.timers.tick(130_000);
+    }
   };
-  const pending = dfs(LIVE, { env: env(), fetch });
-  while (signals.length < 2) await tick();
-  t.mock.timers.tick(129_999);
-  await tick();
-  assert.equal(signals[1]?.aborted, false);
-  t.mock.timers.tick(1);
-  const r = await pending;
-  assert.equal(signals[0], undefined, 'user_data is not Live');
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /no answer in 130 s — money may be spent; dfs \+collect recovers it\n$/);
+  const lasting = flaky(9, () => stall(lasting.calls.at(-1)?.init));
+  const failed = dfs(['appendix', 'user_data'], { env: env(), ...lasting });
+  await timeOut(lasting.calls, 5);
+  const r = await failed;
+  assert.equal(r.code, 1, r.stderr);
+  assert.equal(lasting.calls.length, 5);
+  assertBackoff(lasting.waits, 4);
+  assert.match(r.stderr, /network error: no answer in 130 s — check the network/);
+
+  const healed = flaky(2, () => stall(healed.calls.at(-1)?.init));
+  const ok = dfs(['appendix', 'user_data'], { env: env(), ...healed });
+  await timeOut(healed.calls, 2);
+  assert.equal((await ok).code, 0);
+  assert.equal(healed.calls.length, 3);
+  assertBackoff(healed.waits, 2);
 });
