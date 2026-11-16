@@ -1,6 +1,7 @@
 // Render: help, schema and search text, and the Compact output of a response
 // (docs/spec/modules/render.md). Spec descriptions are HTML: shown as plain text.
 import { concretePath, type Endpoint, hasRun, type Level, type Spec } from './catalog.ts';
+import { units } from './envelope.ts';
 import { isRecord } from './json.ts';
 import { paging } from './planner.ts';
 import { deref, fields, isNullable, type Schema, type Schemas } from './schema.ts';
@@ -178,32 +179,6 @@ export function prune(v: unknown): unknown {
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
   }
   return v === null || v === '' ? undefined : v;
-}
-
-// One unit per item (`tasks[].result[].items[]`, else `tasks[].result[]`); `head` is the task
-// line printed before the first item of a task, or alone when the task has none.
-type Unit = { head?: Record<string, unknown>; item?: unknown };
-
-function* units(body: unknown): Generator<Unit> {
-  const tasks = isRecord(body) && Array.isArray(body.tasks) ? body.tasks : [];
-  for (const t of tasks) {
-    if (!isRecord(t)) continue;
-    const tag = isRecord(t.data) ? t.data.tag : undefined;
-    const task = { dfs: 'task', id: t.id, status_code: t.status_code, tag };
-    let named = false; // task line printed
-    for (const r of Array.isArray(t.result) ? t.result : []) {
-      if (isRecord(r) && Array.isArray(r.items)) {
-        const { items, ...rest } = r;
-        const head = { ...task, ...rest };
-        if (items.length === 0) yield { head };
-        for (const [k, item] of items.entries()) yield { head: k === 0 ? head : undefined, item };
-      } else {
-        yield { head: named ? undefined : task, item: r };
-      }
-      named = true;
-    }
-    if (!named) yield { head: task };
-  }
 }
 
 // shortcut: values pass JSON.parse, so an integer above 2^53 loses digits in Compact output

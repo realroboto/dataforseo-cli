@@ -13,7 +13,7 @@ status: stable
    - Compact output (default), from 28:135–139:
      1. Envelope removed; its cost and status go to the stderr line.
      2. Empty values removed: `null`, `""`, `[]`, `{}`. Other values verbatim: no rounding, no renaming.
-     3. Compact JSON, one item per line.
+     3. Compact JSON, one item per line. Items, task lines and their numbering come from [Envelope](/spec/modules/envelope.md) `units`.
      4. Budget 9,000 characters per command for stdout and stderr together, shared by all pages of `--page-all` (28:171; amended 2026-11-07, 28 end). stderr lines (status, errors, warnings) take their room first; items fill the rest. At the budget dfs stops after a whole item and prints a cut line, e.g. `{"dfs":"cut","shown":18,"total":100,"more":"dfs store show r_8f3k --from 19"}`. `--from` is 1-based.
    - **Line kinds (agent design):** a line whose only dfs key is `"dfs"` is made by dfs; all other lines are API items.
      - Before the items of each task: one task line `{"dfs":"task","id":…,"status_code":…,"tag":…}` plus the result-level fields except `items`, with empty values removed. Reason: with many tasks, an agent must know which task an item belongs to, and adding keys inside items would break "no renaming".

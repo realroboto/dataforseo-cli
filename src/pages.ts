@@ -3,6 +3,7 @@
 // share one cost ceiling and one Compact output budget.
 import { type CallFlags, ceilingOf, priceTree, reusable, reuseRow, sendPlanned } from './call.ts';
 import type { Catalog, Endpoint } from './catalog.ts';
+import { firstResult } from './envelope.ts';
 import { DfsError } from './errors.ts';
 import { isRecord } from './json.ts';
 import { paging, plan } from './planner.ts';
@@ -129,24 +130,21 @@ export async function pageAll(
     if (r.exit !== 0) return close(r.exit);
 
     // Next page: offset while it stays under 10,000, then the token of this response.
-    const [t] = isRecord(r.parsed) && Array.isArray(r.parsed.tasks) ? r.parsed.tasks : [];
-    const [result] = isRecord(t) && Array.isArray(t.result) ? t.result : [];
-    const items = isRecord(result) && Array.isArray(result.items) ? result.items.length : 0;
+    const result = firstResult(r.parsed);
+    const items = Array.isArray(result?.items) ? result.items.length : 0;
     fetched += items;
     const start = readNumber(task.offset) ?? 0;
     const limit = readNumber(task.limit);
     const done =
       items === 0 ||
       (limit !== undefined && items < limit) ||
-      (isRecord(result) &&
-        typeof result.total_count === 'number' &&
-        start + fetched >= result.total_count);
+      (typeof result?.total_count === 'number' && start + fetched >= result.total_count);
     if (done) return close(0);
     if (!tokenMode && start + fetched < OFFSET_MAX) {
       next = { ...task, offset: start + fetched };
       continue;
     }
-    const token = tokenField && isRecord(result) ? result[tokenField] : undefined;
+    const token = tokenField && result?.[tokenField];
     if (typeof token !== 'string' || token === '' || token === next[tokenField ?? '']) {
       warn(
         tokenField
