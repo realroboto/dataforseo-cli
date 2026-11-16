@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { text } from 'node:stream/consumers';
 import pkg from '../package.json' with { type: 'json' };
-import { type Catalog, type Endpoint, isLive } from './catalog.ts';
+import type { Catalog, Endpoint } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { pageAll, pagingOf } from './pages.ts';
@@ -243,7 +243,6 @@ export async function exchange(
     body,
     auth,
     free: opts.free,
-    live: isLive(ep.path),
   });
 
   const parsed = parseJson(res.text);
