@@ -38,4 +38,6 @@ jobs:
       - run: npm install --global "$(jq -r .packageManager package.json)"
       - run: pnpm install --frozen-lockfile
       # Runs the prepublishOnly gate first: typecheck, lint, test, spec:check, build, pack check.
+      # Owner decision 2026-11-16: the npm page shows no text; GitHub keeps README.md.
+      - run: rm README.md
       - run: npm stage publish --provenance
