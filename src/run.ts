@@ -14,6 +14,7 @@ import {
   searchText,
 } from './render.ts';
 import { search } from './search.ts';
+import { StoreHandle } from './store.ts';
 import { STORE_USAGE, store } from './store-cli.ts';
 
 export type Io = {
@@ -26,9 +27,19 @@ export type Io = {
   now?: () => number; // clock of the reuse, spec and price windows; tests set it
 };
 
+// Routing runs first, so help and argv faults never open the Store; the command gets the handle.
+type Command = (handle: StoreHandle) => Promise<number>;
+
 export async function run(argv: string[], io: Io): Promise<number> {
   try {
-    return (await dispatch(argv, io)) ?? 0;
+    const command = await route(argv, io);
+    if (!command) return 0;
+    const handle = new StoreHandle(io.env);
+    try {
+      return await command(handle);
+    } finally {
+      handle.close();
+    }
   } catch (e) {
     const err = e instanceof DfsError ? e : new DfsError(5, messageOf(e));
     io.stderr.write(`dfs: ${err.message}\n`);
@@ -45,7 +56,8 @@ function parse<T extends ParseArgsConfig['options']>(args: string[], options: T)
   }
 }
 
-async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
+// argv to a command; help, search, schema and --version print here and return nothing.
+async function route(argv: string[], io: Io): Promise<Command | undefined> {
   const [first, ...rest] = argv;
 
   if (argv.length === 1 && first === '--version') {
@@ -98,8 +110,7 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
       return;
     }
     const { help: _, ...values } = args.values;
-    await store({ values, positionals: args.positionals }, io);
-    return;
+    return (handle) => store({ values, positionals: args.positionals }, io, handle).then(() => 0);
   }
 
   const { values, positionals } = parse(argv, {
@@ -135,7 +146,7 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
       throw new DfsError(3, `+collect runs at the root or one module; usage: ${COLLECT_USAGE}`);
     }
     if (values.wait !== undefined) throw new DfsError(3, '+collect --wait: not in this build yet');
-    return collectAll(catalog, module, values, io);
+    return (handle) => collectAll(catalog, module, values, io, handle);
   }
   const at = positionals.indexOf('+run');
   if (at >= 0) {
@@ -146,10 +157,11 @@ async function dispatch(argv: string[], io: Io): Promise<number | undefined> {
       io.stdout.write(`usage: ${runUsage(node)}\n`);
       return;
     }
-    return runTasks(catalog, node, variant, values, io);
+    return (handle) => runTasks(catalog, node, variant, values, io, handle);
   }
   if (values.wait !== undefined) throw new DfsError(3, '--wait applies to +run only');
   const { node, params } = catalog.resolve(positionals);
-  if (node.endpoint && !values.help) return call(catalog, node.endpoint, params, values, io);
+  const ep = node.endpoint;
+  if (ep && !values.help) return (handle) => call(catalog, ep, params, values, io, handle);
   io.stdout.write(nodeHelp(node, params, catalog.spec));
 }

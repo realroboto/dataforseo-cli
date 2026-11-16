@@ -345,16 +345,18 @@ test('store spend sums non-sandbox task.cost once per task, by tag, day, module 
 const STORE_TS = new URL('../src/store.ts', import.meta.url).href;
 const BIN = fileURLToPath(new URL('../bin/dfs.ts', import.meta.url));
 const FAKE_API = new URL('./helpers/fake-api.ts', import.meta.url).href;
-// A separate dfs process that saves `count` rows through the Store module.
+// A separate dfs process that saves `count` rows through the Store module, on one Store handle
+// as one dfs command does.
 const writer = (dir: string, prefix: string, count: number) =>
   promisify(execFile)(
     'node',
     [
       '--input-type=module',
       '-e',
-      `import { save } from ${JSON.stringify(STORE_TS)};
+      `import { save, StoreHandle } from ${JSON.stringify(STORE_TS)};
+       const store = new StoreHandle(process.env);
        for (let i = 0; i < ${count}; i++) {
-         const ok = save(process.env, {
+         const ok = save(store, {
            id: '${prefix}' + i, time: new Date().toISOString(), method: 'POST',
            spec_path: '/v3/serp/x', path: '/v3/serp/x', sandbox: 0, request: null,
            http_status: 200, status_code: 20000, cost: 0, estimate: 0, reused_from: null,
@@ -362,7 +364,8 @@ const writer = (dir: string, prefix: string, count: number) =>
            body: JSON.stringify({ tasks: [{ result: [{ items: [{ title: 'row ${prefix}' + i }] }] }] }),
          }, (w) => console.error(w));
          if (!ok) process.exitCode = 1;
-       }`,
+       }
+       store.close();`,
     ],
     { env: { ...process.env, DFS_CONFIG_DIR: dir } },
   );

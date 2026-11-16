@@ -512,6 +512,30 @@ test('Store and unsaved/ both failing: full output on stdout, exit 5', async () 
   assert.deepEqual(JSON.parse(r.stdout).tasks[0].result[0].money.balance, 42.5);
 });
 
+test('a Store that cannot open: a read before the send exits 5, nothing sent; a send saves to unsaved/, task rows warn', async () => {
+  const e = env();
+  mkdirSync(join(e.DFS_CONFIG_DIR, 'store.db')); // the Store file cannot open
+  const live = [...SERP_ARGV, '--body', '{"keyword":"pizza"}'];
+  // --sandbox: only the Reuse check reads the Store before the send. --fresh: only the price tree.
+  for (const flags of [['--sandbox'], ['--fresh']]) {
+    const { fetch, calls } = fakeFetch(() => json(serp([])));
+    const r = await dfs([...live, ...flags], { env: e, fetch });
+    assert.equal(r.code, 5, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /^dfs: .+\n$/);
+    assert.equal(calls.length, 0, flags.join(' '));
+  }
+  // The sandbox reads nothing before the send: the response is kept, the task row write warns.
+  const { fetch } = fakeFetch(() => json(serp([])));
+  const r = await dfs([...live, '--sandbox', '--fresh'], { env: e, fetch });
+  assert.equal(r.code, 0, r.stderr);
+  const [status, kept, rows, ...rest] = r.stderr.trimEnd().split('\n');
+  assert.match(status, / saved=r_\w+$/);
+  assert.match(kept, /^dfs: warning: Store write failed \(.+\); response kept in .+unsaved/);
+  assert.match(rows, /^dfs: warning: task rows not saved \(.+\)$/);
+  assert.deepEqual(rest, []);
+});
+
 test('store list stops within 9,000 characters with a cut line', async () => {
   const e = env();
   for (let i = 0; i < 50; i++) await callAndId(e, ['appendix', 'user_data'], USER_DATA);

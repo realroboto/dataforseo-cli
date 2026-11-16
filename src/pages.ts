@@ -10,6 +10,7 @@ import { paging, plan } from './planner.ts';
 import { type Estimate, estimate, guard, isFree, readNumber, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
+import type { StoreHandle } from './store.ts';
 
 const OFFSET_MAX = 10_000; // vendor: offset only up to 10,000 results
 export type Paging = { task: Record<string, unknown>; token?: string };
@@ -35,6 +36,7 @@ export async function pageAll(
   { task, token: tokenField }: Paging,
   flags: CallFlags,
   io: Io,
+  store: StoreHandle,
 ): Promise<number> {
   const sandbox = flags.sandbox === true;
   const { ceiling, explicit } = ceilingOf(flags, io);
@@ -84,7 +86,8 @@ export async function pageAll(
     plan(catalog, ep, params, [t], { sandbox, validate: !flags['no-validate'] });
   // Page 1 validates before the price tree loads: an invalid body exits 3 with nothing sent.
   let planned = planOf(task);
-  const price = rule && !rule.unbounded ? await priceTree(catalog, io, true, warn) : undefined;
+  const price =
+    rule && !rule.unbounded ? await priceTree(catalog, io, store, true, warn) : undefined;
   let next: Record<string, unknown> = task;
   let tokenMode = tokenField !== undefined && task[tokenField] !== undefined;
   let fetched = 0;
@@ -93,10 +96,10 @@ export async function pageAll(
   for (let page = 1; ; page++) {
     if (page > 1) planned = planOf(next);
     planned.warnings.forEach(warn);
-    const src = flags.fresh || isFree(ep.path) ? undefined : reusable(io, planned, sandbox);
+    const src = flags.fresh || isFree(ep.path) ? undefined : reusable(io, store, planned, sandbox);
     let r: { parsed: unknown; id: string; full: string; cost: number | null; exit: number };
     if (src) {
-      say(reuseRow(catalog, ep, src, io, warn));
+      say(reuseRow(catalog, ep, src, io, store, warn));
       const full = src.body as string;
       r = { parsed: JSON.parse(full), id: src.id, full, cost: 0, exit: 0 };
     } else {
@@ -114,7 +117,7 @@ export async function pageAll(
       if (refusal) {
         return close(4, stopLine(page, usd(spent), est.usd, total.usd ?? usd(spent + ceiling)));
       }
-      const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io);
+      const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store);
       sent.lines.forEach(say);
       r = { ...sent, cost: sent.cost ?? est.usd };
     }

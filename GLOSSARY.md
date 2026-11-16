@@ -59,7 +59,7 @@ The local `node:sqlite` file that keeps every response, saved before anything pr
 _Avoid_: database, cache
 
 **Store handle**:
-The one Store connection of a command: opened on first use, closed by `run()`. Lands in epic #32 R2.
+The one Store connection of a command: opened on first use, closed by `run()`. Command modules get it; only the Store module opens the Store file.
 _Avoid_: connection pool, DB client
 
 **Task ledger**:
