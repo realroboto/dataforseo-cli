@@ -638,16 +638,20 @@ export function readNumber(v: unknown): number | undefined {
   return /^-?\d+(\.\d+)?$/.test(s) ? Number.parseFloat(s) : Number.NaN;
 }
 
-// The first field that makes the price unknown: a count field (unless an array) or a page field
-// that is not a finite number, or an extra at ±Infinity (0 × Infinity = NaN passes the guard).
+// A count field (unless an array) or a page field that is set but not a finite number.
 function unreadable(rule: Rule, task: Record<string, unknown>): string | undefined {
   const finite = (f: string) => Number.isFinite(readNumber(task[f]) ?? 0);
   const c = rule.results?.field;
   if (c !== undefined && !Array.isArray(task[c]) && !finite(c)) return c;
   const p = rule.pages?.field;
   if (p !== undefined && !finite(p)) return p;
-  return rule.extras?.find((x) => Math.abs(readNumber(task[x.field]) ?? 0) === Infinity)?.field;
 }
+
+const notNumber = (rule: Rule, field: string): Estimate => ({
+  usd: null,
+  basis: 'unknown',
+  warning: `price rule ${rule.path}: ${field} is not a number`,
+});
 
 const pageFactor = (pages: Pages | undefined, task: Record<string, unknown>): number => {
   if (!pages) return 1;
@@ -725,13 +729,7 @@ export function estimate(
   for (const t of tasks.length > 0 ? tasks : [{}]) {
     const task = isRecord(t) ? t : {};
     const bad = unreadable(rule, task);
-    if (bad) {
-      return {
-        usd: null,
-        basis: 'unknown',
-        warning: `price rule ${rule.path}: ${bad} is not a number`,
-      };
-    }
+    if (bad) return notNumber(rule, bad);
     const key = readNumber(task.priority) === 2 ? 'priority_high' : 'priority_normal';
     const leaves = isRecord(node) ? node[key] : undefined;
     const price = leafPrice(rule, leaves, task, now);
@@ -753,6 +751,7 @@ export function estimate(
       }
       const n = readNumber(v) ?? 1; // a flag (true, a pattern match) counts 1
       const units = Number.isNaN(n) ? 1 : Math.max(0, n);
+      if (units === Infinity) return notNumber(rule, x.field); // 0 × Infinity = NaN passes the guard
       times *= x.times ?? 1;
       add += units * ((x.add ?? 0) * base + (x.usd ?? 0));
     }

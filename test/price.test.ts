@@ -615,8 +615,7 @@ test('--no-validate: an unreadable count or page field makes the price unknown; 
       r.stderr,
     );
   }
-  // A number that is not finite: on a count or page field, and on an extra (a flag counts 1, but
-  // 1e999 × a times-only extra was NaN, and the guard sent it).
+  // Not finite on a count or page field, or on an extra in use: unknown (0 × Infinity is NaN).
   const huge = `"${'9'.repeat(400)}"`;
   for (const [words, body, field] of [
     ['dataforseo_labs google ranked_keywords live', `{"target":"a.com","limit":${huge}}`, 'limit'],
@@ -639,6 +638,9 @@ test('--no-validate: an unreadable count or page field makes the price unknown; 
     assert.equal(plan.guard, 'refuse', body);
     assert.match(r.stderr, new RegExp(`: ${field} is not a number\\n$`), body);
   }
+  // An extra the rule skips (cid beside keyword) does not count, whatever its value.
+  const skip = { ...US, keyword: 'pizza', cid: '9'.repeat(400), depth: 20 };
+  assert.equal(await usd(e, 'business_data google extended_reviews task_post', skip), 0.00225);
   // A page field: exit 4 and nothing sent; an explicit --max-cost sends.
   const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.002, tasks: [] }));
   const live = [...LIVE, '--body', '{"keyword":"pizza","depth":"ten"}', '--no-validate'];
