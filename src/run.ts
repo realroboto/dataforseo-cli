@@ -27,7 +27,7 @@ export type Io = {
   now?: () => number; // clock of the reuse, spec and price windows; tests set it
 };
 
-// A routed command: it gets the one Store handle of the command (store.md, Store handle).
+// Routing runs first, so help and argv faults never open the Store; the command gets the handle.
 type Command = (handle: StoreHandle) => Promise<number>;
 
 export async function run(argv: string[], io: Io): Promise<number> {

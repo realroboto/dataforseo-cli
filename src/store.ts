@@ -194,7 +194,7 @@ function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
 export class StoreHandle {
   readonly env: NodeJS.ProcessEnv; // DFS_CONFIG_DIR: the Store file and unsaved/
   #db: DatabaseSync | undefined;
-  #failed: { error: unknown } | undefined;
+  #failed: { error: unknown } | undefined; // boxed: a thrown value can be falsy
 
   constructor(env: NodeJS.ProcessEnv) {
     this.env = env;

@@ -15,11 +15,14 @@ status: stable
    - **Login redaction (agent design, 2026-11-07).** Before save, dfs removes `login` from each `user_data` result (`AppendixUserDataResultInfo` carries it, spec `55a4ed0`). Reason: the login is never stored (31:167), and save before print would store it.
    - Failed save: write `~/.config/dfs/unsaved/<id>.json` (600), print as usual, warn; the next run imports the file. If that write also fails: print the full output and exit 5 with `dfs: 5 response not saved — stdout is the only copy` (31:164).
    - **Store handle (epic #32 D3).** One Store connection per command: `StoreHandle` in `src/store.ts`.
-     - `run()` creates it after argv routing and closes it in `finally`, also on error. It opens on first use: a command that never reads or writes the Store never opens it.
+     - `run()` creates it after argv routing and closes it in `finally`, also on error. It opens on first use. `store show`, `list`, `search` and `spend` open it first: a Store fault exits 5 before a flag fault exits 3.
      - Open: dir 700, file 600, WAL, migrate, `unsaved/` import. It runs once per command.
      - Command modules get the handle and call Store functions with it. No module outside the Store opens the Store file.
      - `store sql`: the handle opens first (Store created and migrated), then the read-only connection. `store backup` copies through the handle.
-     - Failed open: the handle keeps the first error for the rest of the command, with no second 30 s busy wait. Effects: a save falls back to `unsaved/` and warns; a read before a send (Reuse, price tree) exits 5 before any send; a task row write warns and continues.
+     - Failed open: the handle keeps the first error for the rest of the command. No second 30 s busy wait follows. Effects:
+       - A save falls back to `unsaved/` and warns.
+       - A read before a send (Reuse, price tree) exits 5 before any send.
+       - A task row write warns and continues.
      - No transaction stays open between statements, so other processes keep writing (WAL; seam 2 test: two processes at once).
    - Data model (agent design, 31:194–201; columns named here are a contract, see below):
      - `response`: one row per HTTP exchange. Columns: id `r_…`, time, method, spec path, concrete path, sandbox, request body, HTTP status, envelope `status_code`, envelope `cost`, estimate, `reused_from`, dfs version, spec SHA (34:92), body as JSONB (verbatim), `reuse_key` (added in `user_version` 3, indexed with time). This table is the truth of the Store (31:196).

@@ -91,6 +91,8 @@ export async function store(
     return;
   }
   if (sub === 'sql') return sql(handle, rest[0], io);
+  // A Store fault (exit 5) comes before a flag fault (exit 3), as these commands always did.
+  handle.db();
   if (sub === 'show') return show(handle, rest[0], v, io);
   const f: Filter = { since: since(v.since, io), path: pathOf(v.path) };
   if (sub === 'list') io.stdout.write(fit(listRows(handle, f)));

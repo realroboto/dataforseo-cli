@@ -516,8 +516,7 @@ test('a Store that cannot open: a read before the send exits 5, nothing sent; a 
   const e = env();
   mkdirSync(join(e.DFS_CONFIG_DIR, 'store.db')); // the Store file cannot open
   const live = [...SERP_ARGV, '--body', '{"keyword":"pizza"}'];
-  // Each reads the Store before the send: the Reuse check (the sandbox loads no price tree),
-  // the price tree (--fresh skips the Reuse check).
+  // --sandbox: only the Reuse check reads the Store before the send. --fresh: only the price tree.
   for (const flags of [['--sandbox'], ['--fresh']]) {
     const { fetch, calls } = fakeFetch(() => json(serp([])));
     const r = await dfs([...live, ...flags], { env: e, fetch });
