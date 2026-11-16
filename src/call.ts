@@ -1,18 +1,15 @@
 // The plain call: one endpoint call through Dispatch (body, guard, send, save before print,
 // Compact output, exit code), or its --dry-run plan. `--page-all` runs in src/pages.ts.
 import type { Catalog, Endpoint } from './catalog.ts';
-import { Dispatch, type SpendFlags } from './dispatch.ts';
+import { Dispatch } from './dispatch.ts';
 import { DfsError } from './errors.ts';
-import { pageAll, pagingOf } from './pages.ts';
+import { type PageFlags, pageAll, pagingOf } from './pages.ts';
 import { plan, readBody } from './planner.ts';
 import { Output } from './render.ts';
 import type { Io } from './run.ts';
 import type { StoreHandle } from './store.ts';
 
-export type CallFlags = SpendFlags & {
-  body?: string;
-  full?: boolean;
-  'no-validate'?: boolean;
+export type CallFlags = PageFlags & {
   'page-all'?: boolean; // follow offset, then the token, over all pages (src/pages.ts)
 };
 

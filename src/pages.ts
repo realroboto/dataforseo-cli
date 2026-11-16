@@ -1,20 +1,21 @@
 // --page-all (pricing.md, render.md): one task, sent page by page. `offset` pages up to 10,000,
 // then the endpoint's token from each response (help-center: offset vs offset_token). All pages
-// share one cost ceiling and one Compact output budget.
-import type { CallFlags } from './call.ts';
+// share one cost ceiling and one Compact output budget. Each page runs through Dispatch; the stop
+// rules stay here (epic #32 D6).
 import type { Catalog, Endpoint } from './catalog.ts';
-import { ceilingOf, priceTree, reusable, reuseRow, sendPlanned } from './dispatch.ts';
+import { Dispatch, type SpendFlags } from './dispatch.ts';
 import { firstResult } from './envelope.ts';
 import { DfsError } from './errors.ts';
 import { isRecord } from './json.ts';
 import { paging, plan } from './planner.ts';
-import { type Estimate, estimate, guard, isFree, readNumber, ruleFor } from './pricing.ts';
+import { readNumber } from './pricing.ts';
 import { command, Output } from './render.ts';
 import type { Io } from './run.ts';
 import type { StoreHandle } from './store.ts';
 
 const OFFSET_MAX = 10_000; // vendor: offset only up to 10,000 results
 export type Paging = { task: Record<string, unknown>; token?: string };
+export type PageFlags = SpendFlags & { body?: string; full?: boolean; 'no-validate'?: boolean };
 
 export function pagingOf(catalog: Catalog, ep: Endpoint, tasks: unknown[] | undefined): Paging {
   const p = paging(ep, catalog.spec.components.schemas);
@@ -34,14 +35,13 @@ export async function pageAll(
   ep: Endpoint,
   params: Record<string, string>,
   { task, token: tokenField }: Paging,
-  flags: CallFlags,
+  flags: PageFlags,
   io: Io,
   store: StoreHandle,
 ): Promise<number> {
-  const sandbox = flags.sandbox === true;
-  const { ceiling, explicit } = ceilingOf(flags, io);
-  const free = sandbox || isFree(ep.path);
-  const rule = free ? undefined : ruleFor(ep.path);
+  const out = new Output(io, 'page-all');
+  const dispatch = new Dispatch(catalog, io, store, out, flags); // an invalid ceiling exits 3
+  const { ceiling } = dispatch;
   // Rerun of a stop: same task and flags, a higher ceiling; pages already saved reuse at $0.
   // A long body would crowd out the output budget: the rerun then names it only.
   const arg = flags.body?.startsWith('@') ? flags.body : JSON.stringify(task);
@@ -58,53 +58,39 @@ export async function pageAll(
       .join(' ');
   const stopLine = (page: number, spent: number, est: number | null, need: number) =>
     `dfs: --page-all stopped before page ${page}: cost so far $${spent} + page estimate $${est ?? '?'} above ceiling $${ceiling}; pages 1-${page - 1} saved — rerun: ${rerun(need)}`;
-  const out = new Output(io, 'page-all');
   // The longest stop line keeps its room, so the whole output stays within the budget.
   const big = 99_999.999999;
   out.reserve(stopLine(99_999, big, big, big));
-  const warn = (w: string) => out.warn(w);
 
   const planOf = (t: Record<string, unknown>) =>
-    plan(catalog, ep, params, [t], { sandbox, validate: !flags['no-validate'] });
-  // Page 1 validates before the price tree loads: an invalid body exits 3 with nothing sent.
+    plan(catalog, ep, params, [t], {
+      sandbox: flags.sandbox === true,
+      validate: !flags['no-validate'],
+    });
+  // Page 1 validates before the price tree loads: an invalid body exits 3 with nothing sent. The
+  // tree loads next, also when page 1 is reused (as before epic #32).
   let planned = planOf(task);
-  const price =
-    rule && !rule.unbounded ? await priceTree(catalog, io, store, true, warn) : undefined;
+  await dispatch.price(ep);
   let next: Record<string, unknown> = task;
   let tokenMode = tokenField !== undefined && task[tokenField] !== undefined;
   let fetched = 0;
   let spent = 0;
   for (let page = 1; ; page++) {
     if (page > 1) planned = planOf(next);
-    planned.warnings.forEach(warn);
-    const src = flags.fresh || isFree(ep.path) ? undefined : reusable(io, store, planned, sandbox);
-    let r: { parsed: unknown; id: string; full: string; cost: number | null; exit: number };
-    if (src) {
-      out.line(reuseRow(catalog, ep, src, io, store, warn));
-      const full = src.body as string;
-      r = { parsed: JSON.parse(full), id: src.id, full, cost: 0, exit: 0 };
-    } else {
-      const est: Estimate = free
-        ? { usd: 0, basis: 'rule' }
-        : estimate(rule, planned.body ?? [], price?.tree, (io.now ?? Date.now)());
-      if (est.warning) warn(est.warning);
-      const total = est.usd === null ? est : { ...est, usd: usd(spent + est.usd) };
-      // An unknown price sent under an explicit --max-cost: the real cost so far still stops.
-      const unknownOver = est.usd === null && page > 1 && spent >= ceiling;
-      const refusal = free
-        ? undefined
-        : (guard(ep.path, total, ceiling, explicit) ?? (unknownOver ? 'over' : undefined));
-      if (refusal && page === 1) throw new DfsError(4, refusal);
-      if (refusal) {
-        const need = total.usd ?? usd(spent + ceiling);
-        return out.close(stopLine(page, usd(spent), est.usd, need), 4);
-      }
-      const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store, out);
-      for (const l of sent.lines) out.line(l);
-      out.exit(sent.exit);
-      r = { ...sent, cost: sent.cost ?? est.usd };
+    const call = await dispatch.prepare(ep, planned);
+    const est = call.est?.usd;
+    // An unknown price sent under an explicit --max-cost: the real cost so far still stops.
+    const unknownOver = est === null && page > 1 && spent >= ceiling;
+    const refusal = dispatch.guard([call], spent) ?? (unknownOver ? 'over' : undefined);
+    if (refusal && page === 1) throw new DfsError(4, refusal);
+    if (refusal) {
+      const need = usd(spent + (est ?? ceiling));
+      return out.close(stopLine(page, usd(spent), est ?? null, need), 4);
     }
-    spent += r.cost ?? 0;
+    const r = await dispatch.send(call);
+    for (const l of r.lines) out.line(l);
+    out.exit(r.exit);
+    spent += r.cost ?? est ?? 0;
     if (flags.full) out.full(r.full.replace(/[\r\n]/g, ''));
     else if (r.parsed !== undefined) out.response(r.parsed, r.id);
     if (r.exit !== 0) return out.close();
@@ -126,7 +112,7 @@ export async function pageAll(
     }
     const token = tokenField && result?.[tokenField];
     if (typeof token !== 'string' || token === '' || token === next[tokenField ?? '']) {
-      warn(
+      out.warn(
         tokenField
           ? `no ${tokenField} in the response of page ${page}: later pages not fetched`
           : `offset reached ${OFFSET_MAX}; ${ep.path} has no token field: later pages not fetched`,

@@ -268,3 +268,60 @@ test('--page-all: an invalid body exits 3 before the price tree loads; nothing s
     [],
   );
 });
+
+test('--page-all: a page-1 estimate above the ceiling exits 4 with nothing sent and no stop line', async () => {
+  const a = api(12_000, 'offset_token', 0.132);
+  const argv = [...IDEAS, '--body', JSON.stringify(TASK), '--page-all', '--max-cost', '0.1'];
+  const r = await dfs(argv, { env: env(), fetch: a.fetch });
+  assert.equal(r.code, 4, r.stderr);
+  assert.equal(a.bodies.length, 0);
+  assert.match(
+    r.stderr,
+    /^dfs: estimate \$0\.132 above ceiling \$0\.1 for \/v3\/dataforseo_labs\/google\/keyword_ideas\/live — raise --max-cost/m,
+  );
+  assert.doesNotMatch(r.stderr, /stopped before/);
+});
+
+test('--page-all: a page with no cost in its response adds its estimate to the cost so far', async () => {
+  const bodies: unknown[] = [];
+  const { fetch } = fakeFetch((url, init) => {
+    if (url.endsWith('/v3/appendix/user_data')) return json(USER_DATA);
+    const [t] = JSON.parse(String(init?.body));
+    bodies.push(t);
+    return json({
+      ...page(1000, Number(t.offset ?? 0), 12_000, 'offset_token', 0),
+      cost: undefined,
+    });
+  });
+  const argv = [...IDEAS, '--body', JSON.stringify(TASK), '--page-all', '--max-cost', '0.3'];
+  const r = await dfs(argv, { env: env(), fetch });
+  assert.equal(r.code, 4, r.stderr);
+  assert.equal(bodies.length, 2);
+  assert.match(r.stderr, /tasks=1 cost=\$\? est=\$0\.132 saved=r_/);
+  assert.match(
+    r.stderr,
+    /stopped before page 3: cost so far \$0\.264 \+ page estimate \$0\.132 above ceiling \$0\.3; .* --max-cost 0\.396\n$/,
+  );
+});
+
+test('--page-all: a stale price tree refreshes before page 1, also when every page is reused', async () => {
+  const e = env();
+  const a = api(5, 'offset_token', 0.01224);
+  const at = (hours: number) => () => Date.parse('2026-11-07T12:00:00Z') + hours * 3_600_000;
+  assert.equal(
+    (await dfs(['appendix', 'user_data'], { env: e, fetch: a.fetch, now: at(-25) })).code,
+    0,
+  );
+  const argv = [...IDEAS, '--body', JSON.stringify({ ...TASK, limit: 2 }), '--page-all'];
+  // Tree 20 h old: no refresh; three pages sent and saved.
+  assert.equal((await dfs(argv, { env: e, fetch: a.fetch, now: at(-5) })).code, 0);
+  const before = a.calls.length;
+  // Tree 25 h old, pages 5 h old: user_data first, then three reused pages.
+  const r = await dfs(argv, { env: e, fetch: a.fetch });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(
+    a.calls.slice(before).map((c) => new URL(c.url).pathname),
+    ['/v3/appendix/user_data'],
+  );
+  assert.equal(r.stderr.match(/reused=r_/g)?.length, 3);
+});
