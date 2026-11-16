@@ -48,6 +48,7 @@ usage: dfs <module> <words…> [--help]   list a level, or show an endpoint
 
 call flags:
   --body <json|@file|->   tasks: a JSON object (one task) or array; @file; - reads stdin
+  --params <json>         query parameters: a JSON object, such as {"resolve_goto_urls":true}
   --full                  print the exact API response, not the Compact output
   --sandbox               send to the free sandbox, same credentials
   --max-cost <usd>        cost ceiling (default: DFS_MAX_COST, else 1); also sends an unknown price
@@ -100,9 +101,11 @@ export function nodeHelp(node: Level, params: Record<string, string>, spec: Spec
     const description = plainLines(ep.op.description);
     if (description.length > 0) lines.push('', ...description);
     if (ep.method === 'post') lines.push('', `request fields: dfs schema ${ep.words.join(' ')}`);
+    const query = queryLines(ep, spec.components.schemas);
+    if (query.length > 0) lines.push('', ...query);
     lines.push(
       '',
-      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''} [--full] [--sandbox] [--max-cost <usd>] [--fresh]${paging(ep, spec.components.schemas) ? ' [--page-all]' : ''} [--dry-run] [--no-validate]`,
+      `call: ${command(ep.words)}${ep.method === 'post' ? ' --body <json|@file|->' : ''}${query.length > 0 ? ' [--params <json>]' : ''} [--full] [--sandbox] [--max-cost <usd>] [--fresh]${paging(ep, spec.components.schemas) ? ' [--page-all]' : ''} [--dry-run] [--no-validate]`,
     );
   }
   const children = [...node.children].toSorted(([a], [b]) => a.localeCompare(b));
@@ -143,10 +146,24 @@ function fieldLines(
   return lines;
 }
 
+// Query parameters of an endpoint, one line each as task fields; none: no lines.
+function queryLines(ep: Endpoint, schemas: Schemas): string[] {
+  const query = (ep.op.parameters ?? []).filter((p) => p.in === 'query');
+  if (query.length === 0) return [];
+  return [
+    'query parameters (--params):',
+    ...query.map((p) => {
+      const text = brief(p.description ?? deref(p.schema, schemas)?.description, 160);
+      return `  ${p.name}  ${typeLabel(p.schema, schemas)}${text ? `  ${text}` : ''}`;
+    }),
+  ];
+}
+
 export function schemaText(ep: Endpoint, spec: Spec): string {
   const lines = [command(ep.words), `${ep.method.toUpperCase()} ${ep.path}`];
-  const params = (ep.op.parameters ?? []).map((p) => `<${p.name}>`);
+  const params = (ep.op.parameters ?? []).filter((p) => p.in === 'path').map((p) => `<${p.name}>`);
   if (params.length > 0) lines.push(`path parameters: ${params.join(' ')}`);
+  lines.push(...queryLines(ep, spec.components.schemas));
   const body = ep.op.requestBody?.content?.['application/json']?.schema;
   if (!body) lines.push('body: none');
   else {

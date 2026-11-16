@@ -109,6 +109,8 @@ test('the structural check names each fault', () => {
       '/v3/a/bad': post('object'),
       '/v3/a/two': { get: {}, ...post('array') },
       '/v3/a/q': { get: { parameters: [{ name: 'x', in: 'query' }] } },
+      '/v3/a/p/{id}': { get: { parameters: [{ name: 'idd', in: 'path' }] } },
+      '/v3/a/h': { get: { parameters: [{ name: 'k', in: 'header' }] } },
       '/v3/search/x': { get: {} },
       '/v3/a/+collect': { get: {} },
       '/v3/a/{id}': { get: {} },
@@ -116,16 +118,17 @@ test('the structural check names each fault', () => {
       '/v3/a/{x}': { get: {} },
     },
   };
-  assert.deepEqual(checkSpec(doc, 11), [
+  assert.deepEqual(checkSpec(doc, 13), [
     '/v3/a/bad: POST body is not an array of tasks',
     '/v3/a/two: 2 methods, want 1',
-    '/v3/a/q: a parameter not in the path',
+    '/v3/a/p/{id}: path parameter idd not in the path',
+    '/v3/a/h: parameter k in header, want path or query',
     '/v3/search/x: a command word clashes with a dfs command',
     '/v3/a/+collect: a command word clashes with a dfs command',
     '/v3/a/{country}/y: {country} and {id} share one slot',
     '/v3/a/{x}: same command words as /v3/a/{id}',
     '/v3/a/{x}: {x} and {country} share one slot',
-    'path count fell from 11 to 9, more than 10 %',
+    'path count fell from 13 to 11, more than 10 %',
   ]);
   assert.deepEqual(checkSpec({ paths: [] }), ['not an OpenAPI document with paths and components']);
 });

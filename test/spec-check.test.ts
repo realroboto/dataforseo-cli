@@ -16,7 +16,7 @@ const RAW = `https://raw.githubusercontent.com/dataforseo/OpenApiDocumentation/$
 const SNAPSHOT_SHA = readSnapshot().sha;
 
 const commits = (sha: string, etag: string) =>
-  new Response(JSON.stringify([{ sha, commit: { committer: { date: '2026-11-05T08:00:00Z' } } }]), {
+  new Response(JSON.stringify([{ sha, commit: { committer: { date: '2026-11-14T08:00:00Z' } } }]), {
     headers: { etag },
   });
 // The snapshot spec plus one GET path, as JSON text (JSON is YAML).
@@ -85,7 +85,7 @@ test('a new SHA: raw fetch by SHA, check, atomic cache; --version shows the cach
   assert.deepEqual(cached.spec, JSON.parse(newSpec()));
 
   const v = await dfs(['--version'], { env });
-  assert.match(v.stdout, /^dfs \d+\.\d+\.\d+ \(spec abc1234, 2026-11-05\)\n$/);
+  assert.match(v.stdout, /^dfs \d+\.\d+\.\d+ \(spec abc1234, 2026-11-14\)\n$/);
   // The same SHA again: no raw fetch.
   const again = fakeFetch(() => commits(NEW_SHA, '"e3"'));
   await dfs(['--help'], { env, fetch: again.fetch, now: at(T0 + 25 * HOUR) }, { specCheck: true });
@@ -93,6 +93,26 @@ test('a new SHA: raw fetch by SHA, check, atomic cache; --version shows the cach
     again.calls.map((c) => c.url),
     [COMMITS],
   );
+});
+
+test('a new spec with a query parameter passes the check and swaps in', async () => {
+  const env = { DFS_CONFIG_DIR: dir() };
+  const { fetch } = fakeFetch((url) =>
+    url === COMMITS
+      ? commits(NEW_SHA, '"e5"')
+      : new Response(
+          newSpec((s) => {
+            s.paths['/v3/appendix/new_thing'] = {
+              get: { parameters: [{ name: 'q', in: 'query', schema: { type: 'boolean' } }] },
+            };
+          }),
+        ),
+  );
+  const r = await dfs(['appendix', 'new_thing', '--help'], { env, fetch }, { specCheck: true });
+  assert.equal(r.stderr, '');
+  assert.equal(r.code, 0);
+  const cached = JSON.parse(readFileSync(join(env.DFS_CONFIG_DIR, 'spec.json'), 'utf8'));
+  assert.equal(cached.sha, NEW_SHA);
 });
 
 test('a commit older than the spec in use is nothing new: no raw fetch, no cache', async () => {
@@ -148,18 +168,32 @@ const failures: [string, (url: string) => Response | Promise<Response>, RegExp][
     /path count fell from 565 to 466/,
   ],
   [
-    'a query parameter',
+    'a path parameter not in the path',
     (url) =>
       url === COMMITS
         ? commits(NEW_SHA, '"e4"')
         : new Response(
             newSpec((s) => {
               s.paths['/v3/appendix/new_thing'] = {
-                get: { parameters: [{ name: 'q', in: 'query' }] },
+                get: { parameters: [{ name: 'q', in: 'path' }] },
               };
             }),
           ),
-    /new_thing: a parameter not in the path/,
+    /new_thing: path parameter q not in the path/,
+  ],
+  [
+    'a header parameter',
+    (url) =>
+      url === COMMITS
+        ? commits(NEW_SHA, '"e4"')
+        : new Response(
+            newSpec((s) => {
+              s.paths['/v3/appendix/new_thing'] = {
+                get: { parameters: [{ name: 'q', in: 'header' }] },
+              };
+            }),
+          ),
+    /new_thing: parameter q in header, want path or query/,
   ],
   [
     'a POST body that is not an array',
@@ -202,10 +236,10 @@ for (const [name, respond, reason] of failures) {
     const { fetch, calls } = fakeFetch(respond);
     const r = await dfs(['--help'], { env, fetch }, { specCheck: true });
     assert.equal(r.code, 0);
-    assert.match(r.stdout, /\(spec 55a4ed0, 2026-10-26\)/);
+    assert.match(r.stdout, /\(spec 8f32867, 2026-11-13\)/);
     const lines = r.stderr.split('\n').filter(Boolean);
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /^dfs: warning: spec check failed, keeping spec 55a4ed0: /);
+    assert.match(lines[0], /^dfs: warning: spec check failed, keeping spec 8f32867: /);
     assert.match(lines[0], reason);
     assert.match(lines[0], /next try in 1 h$/);
 
@@ -256,7 +290,7 @@ test('a failed check after a cache swap keeps the cache and the old ETag', async
   const bad = fakeFetch((url) =>
     url === COMMITS
       ? new Response(
-          JSON.stringify([{ sha: newer, commit: { committer: { date: '2026-11-06T08:00:00Z' } } }]),
+          JSON.stringify([{ sha: newer, commit: { committer: { date: '2026-11-15T08:00:00Z' } } }]),
           { headers: { etag: '"e2"' } },
         )
       : new Response('', { status: 502 }),

@@ -18,7 +18,7 @@ From 28:148–165, with the 31 amendments (28:158–159; 31:142, 31:192) and the
 | 0 | ok | yes | 20000, 20100. Warning only: 40106 partial results (unreturned pages not charged), 40102 no search results (billable, r31:110), 40007 notice |
 | 1 | API or network error, after retries | maybe | HTTP 404, 500; 5xxxx; 40401; 40403; 40404 sandbox no data; 405xx; connection lost after a paid send; every task of the call failed; `+run`/`+collect`: a task still pending whose last collect failed (request or envelope); a body that is not a JSON object (line `dfs: HTTP <status> — not a JSON object: <excerpt>`) |
 | 2 | account: the owner must act | no | HTTP 401, 402; 40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207, 40210; missing credential variable; `+run`/`+collect`: a collect or `tasks_ready` envelope in this class (polling stops) |
-| 3 | invalid input, nothing sent | no | unknown command, bad JSON, body outside the spec, >100 tasks, Live >1 task (or >20 where documented), >8 filters |
+| 3 | invalid input, nothing sent | no | unknown command, bad JSON, body or `--params` outside the spec, >100 tasks, Live >1 task (or >20 where documented), >8 filters |
 | 4 | cost guard: nothing **more** sent; anything already paid is saved | no more | estimate above the ceiling; unknown or unbounded price with no explicit `--max-cost`; `--page-all` stop |
 | 5 | dfs internal bug | — | unexpected exception; response not saved anywhere |
 | 6 | incomplete: at least one task failed **or is not ready** | yes | good tasks on stdout; stderr task lines; `+run` timeout or `--wait 0`; 20100 on a get, 40601, 40602 |
@@ -29,4 +29,4 @@ From 28:148–165, with the 31 amendments (28:158–159; 31:142, 31:192) and the
 
 ### Global flags (v1)
 
-Kept: `--body`, `--full`, `--sandbox`, `--dry-run`, `--page-all` (follows `offset` to 10,000, then `offset_token` / `search_after_token`), `--max-cost <usd>`, `--fresh`, `--wait <s>` (helpers), `--no-validate` (Planner) (28:171; 31:118, 31:130). Dropped: `--items`, `--fields`, `--output`, `--tag`, `--params`, `--method`, `--mode`, `--cache`, `--no-store`, `--db` (28:114, 28:118, 28:172; 31:139, 31:179).
+Kept: `--body`, `--full`, `--sandbox`, `--dry-run`, `--page-all` (follows `offset` to 10,000, then `offset_token` / `search_after_token`), `--max-cost <usd>`, `--fresh`, `--wait <s>` (helpers), `--no-validate` (Planner) (28:171; 31:118, 31:130), `--params <json>` (query parameters of an endpoint call, Planner; added by #63 after spec `8f32867` gave 5 paths a query parameter). Dropped: `--items`, `--fields`, `--output`, `--tag`, `--method`, `--mode`, `--cache`, `--no-store`, `--db` (28:114, 28:118, 28:172; 31:139, 31:179).

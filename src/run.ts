@@ -124,13 +124,16 @@ async function route(argv: string[], io: Io): Promise<Command | undefined> {
     fresh: { type: 'boolean' },
     wait: { type: 'string' },
     'page-all': { type: 'boolean' },
+    params: { type: 'string' },
   });
   if (positionals.length === 0) {
     io.stdout.write(rootHelp(catalog.root, catalog));
     return;
   }
-  if (values['page-all'] && positionals.some((w) => w === '+run' || w === '+collect')) {
-    throw new DfsError(3, '--page-all applies to endpoint calls only, not +run or +collect');
+  // +run and +collect collect calls send no query parameters: vendor defaults.
+  const flag = (['page-all', 'params'] as const).find((f) => values[f] !== undefined);
+  if (flag && positionals.some((w) => w === '+run' || w === '+collect')) {
+    throw new DfsError(3, `--${flag} applies to endpoint calls only, not +run or +collect`);
   }
   if (positionals.includes('+collect')) {
     if (values.help) {

@@ -20,10 +20,10 @@ const MODULES = [
 
 test('--version shows the dfs version and the snapshot SHA and date', async () => {
   const { sha, date } = readSnapshot();
-  assert.equal(`${sha.slice(0, 7)} ${date.slice(0, 10)}`, '55a4ed0 2026-10-26');
+  assert.equal(`${sha.slice(0, 7)} ${date.slice(0, 10)}`, '8f32867 2026-11-13');
   const { code, stdout, stderr } = await dfs(['--version']);
   assert.equal(code, 0);
-  assert.match(stdout, /^dfs \d+\.\d+\.\d+ \(spec 55a4ed0, 2026-10-26\)\n$/);
+  assert.match(stdout, /^dfs \d+\.\d+\.\d+ \(spec 8f32867, 2026-11-13\)\n$/);
   assert.equal(stderr, '');
 });
 
@@ -97,6 +97,15 @@ test('an endpoint --help shows how to call it', async () => {
   );
   const get = await dfs(['appendix', 'user_data', '--help']);
   assert.match(get.stdout, /^call: dfs appendix user_data \[--full\]/m);
+  // Query parameters (#63): the call line takes --params, and the help lists them.
+  const query = await dfs(['serp', 'google', 'organic', 'task_get', 'regular', '<id>', '--help']);
+  assert.match(
+    query.stdout,
+    /^call: dfs serp google organic task_get regular <id> \[--params <json>\] \[--full\]/m,
+  );
+  assert.match(query.stdout, /^query parameters \(--params\):\n {2}resolve_goto_urls {2}boolean /m);
+  assert.doesNotMatch(get.stdout, /--params/);
+  assert.match((await dfs(['--help'])).stdout, /^ {2}--params <json> {9}query parameters: /m);
 });
 
 test('every spec path (565) has a command whose --help exits 0 and shows its call line', async () => {
@@ -141,7 +150,10 @@ test('schema of an id slot names its GET endpoint; of a level exits 3', async ()
   const get = await dfs(['schema', 'serp', 'google', 'organic', 'task_get', 'advanced']);
   assert.equal(get.code, 0);
   assert.match(get.stdout, /^GET \/v3\/serp\/google\/organic\/task_get\/advanced\/\{id\}$/m);
-  assert.match(get.stdout, /^path parameters: <id>\nbody: none\n$/m);
+  assert.match(
+    get.stdout,
+    /^path parameters: <id>\nquery parameters \(--params\):\n {2}resolve_goto_urls {2}boolean {2}resolve goto redirect URLs; .+\nbody: none\n$/m,
+  );
   const level = await dfs(['schema', 'serp', 'google']);
   assert.equal(level.code, 3);
   assert.equal(level.stderr, 'dfs: dfs serp google is a level, not an endpoint\n');

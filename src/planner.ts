@@ -93,9 +93,46 @@ export async function readBody(
   return tasks;
 }
 
+// `--params` (catalog.md, query parameters): a JSON object → `?name=value…`, names sorted, so one
+// set of values gives one URL and one Reuse key. Names and types fault like body fields. An
+// endpoint with no query parameters refuses `--params`, as a GET refuses `--body`.
+function queryOf(ep: Endpoint, arg: string | undefined, schemas: Schemas) {
+  if (arg === undefined) return { query: '', found: [] };
+  const known = new Map(
+    (ep.op.parameters ?? []).filter((p) => p.in === 'query').map((p) => [p.name, p.schema]),
+  );
+  if (known.size === 0) {
+    throw new DfsError(
+      3,
+      `dfs ${ep.words.join(' ')} takes no query parameters: it takes no --params`,
+    );
+  }
+  let v: unknown;
+  try {
+    v = JSON.parse(arg);
+  } catch (e) {
+    throw new DfsError(3, `--params is not JSON: ${messageOf(e)}`);
+  }
+  if (!isRecord(v)) throw new DfsError(3, '--params must be a JSON object');
+  const found: string[] = [];
+  const query = new URLSearchParams();
+  for (const k of Object.keys(v).sort()) {
+    const x = v[k];
+    // shortcut: scalar values only (spec 8f32867 has boolean ones), add OpenAPI form
+    // serialization when the spec gets an array or object query parameter.
+    if (!['string', 'number', 'boolean'].includes(typeof x)) {
+      throw new DfsError(3, `params.${k}: want a string, number or boolean`);
+    }
+    if (!known.has(k)) found.push(`params.${k}: unknown query parameter`);
+    else found.push(...faults(x, known.get(k), schemas, `params.${k}`).map(describe));
+    query.append(k, String(x));
+  }
+  return { query: query.size > 0 ? `?${query}` : '', found };
+}
+
 export type Plan = {
   method: string;
-  path: string; // concrete path
+  path: string; // concrete path, with the query string of --params
   url: string;
   body?: unknown[];
   warnings: string[];
@@ -106,7 +143,8 @@ export function plan(
   ep: Endpoint,
   params: Record<string, string>,
   tasks: unknown[] | undefined,
-  opts: { sandbox: boolean; validate: boolean; first?: number }, // first: body index of tasks[0]
+  // first: body index of tasks[0]; query: the --params text (query parameters)
+  opts: { sandbox: boolean; validate: boolean; first?: number; query?: string },
 ): Plan {
   const base = opts.sandbox
     ? SANDBOX
@@ -140,16 +178,21 @@ export function plan(
     ...faults(t, items, schemas, `body[${(opts.first ?? 0) + i}]`).map(describe),
     ...filterFaults(t, items, schemas, `body[${(opts.first ?? 0) + i}]`),
   ]);
-  if (found.length > 0) {
-    if (!opts.validate) warnings.push(`${list(found)} — sent anyway: --no-validate`);
+  const { query, found: queryFound } = queryOf(ep, opts.query, schemas);
+  for (const [faulty, what] of [
+    [found, 'the body'],
+    [queryFound, '--params'],
+  ] as const) {
+    if (faulty.length === 0) continue;
+    if (!opts.validate) warnings.push(`${list(faulty)} — sent anyway: --no-validate`);
     else {
       throw new DfsError(
         3,
-        `${list(found)} — fix the body (fields: dfs schema ${ep.words.join(' ')}), or pass --no-validate when the DataForSEO docs list the field`,
+        `${list(faulty)} — fix ${what} (fields: dfs schema ${ep.words.join(' ')}), or pass --no-validate when the DataForSEO docs list the field`,
       );
     }
   }
-  const path = concretePath(ep, params);
+  const path = concretePath(ep, params) + query;
   return {
     method: ep.method.toUpperCase(),
     path,
