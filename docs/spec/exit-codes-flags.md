@@ -16,7 +16,7 @@ From 28:148–165, with the 31 amendments (28:158–159; 31:142, 31:192) and the
 | Exit | Meaning | Money spent? | Cases |
 |---|---|---|---|
 | 0 | ok | yes | 20000, 20100. Warning only: 40106 partial results (unreturned pages not charged), 40102 no search results (billable, r31:110), 40007 notice |
-| 1 | API or network error, after retries | maybe | HTTP 404, 500; 5xxxx; 40401; 40403; 40404 sandbox no data; 405xx; connection lost after a paid send; every task of the call failed |
+| 1 | API or network error, after retries | maybe | HTTP 404, 500; 5xxxx; 40401; 40403; 40404 sandbox no data; 405xx; connection lost after a paid send; every task of the call failed; a body that is not a JSON object (line `dfs: HTTP <status> — not a JSON object: <excerpt>`) |
 | 2 | account: the owner must act | no | HTTP 401, 402; 40100, 40104, 40200, 40201, 40203, 40205, 40206, 40207, 40210; missing credential variable |
 | 3 | invalid input, nothing sent | no | unknown command, bad JSON, body outside the spec, >100 tasks, Live >1 task (or >20 where documented), >8 filters |
 | 4 | cost guard: nothing **more** sent; anything already paid is saved | no more | estimate above the ceiling; unknown or unbounded price with no explicit `--max-cost`; `--page-all` stop |
