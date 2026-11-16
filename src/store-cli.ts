@@ -10,9 +10,9 @@ import {
   getRow,
   listRows,
   openReadOnly,
-  openStore,
   SPEND_BY,
   type SpendBy,
+  type StoreHandle,
   searchItems,
   spend,
   storeFile,
@@ -49,6 +49,7 @@ const FLAGS: Record<string, (keyof StoreFlags)[]> = {
 export async function store(
   args: { values: StoreFlags; positionals: string[] },
   io: Io,
+  handle: StoreHandle,
 ): Promise<void> {
   const { values: v } = args;
   const [sub, ...rest] = args.positionals;
@@ -80,7 +81,7 @@ export async function store(
       );
     }
     try {
-      await backupStore(io.env, rest[0]);
+      await backupStore(handle, rest[0]);
     } catch (e) {
       // dfs created the file above: remove it so a rerun can take the name; the fault stays the error.
       await rm(rest[0], { force: true }).catch(() => {});
@@ -89,37 +90,32 @@ export async function store(
     io.stdout.write(`${rest[0]}\n`);
     return;
   }
-  if (sub === 'sql') return sql(rest[0], io);
-  const db = openStore(io.env);
-  try {
-    if (sub === 'show') return show(db, rest[0], v, io);
-    const f: Filter = { since: since(v.since, io), path: pathOf(v.path) };
-    if (sub === 'list') io.stdout.write(fit(listRows(db, f)));
-    if (sub === 'search') io.stdout.write(fit(searchItems(db, words, f).map(hit)));
-    if (sub === 'spend') {
-      if (v.by !== undefined && !SPEND_BY.includes(v.by as SpendBy)) {
-        throw new DfsError(3, `--by ${v.by}: want ${SPEND_BY.join(', ')}`);
-      }
-      const [total, ...groups] = spend(db, f.since, v.by as SpendBy | undefined);
-      const by = v.by as SpendBy;
-      io.stdout.write(
-        fit([
-          { dfs: 'spend', since: f.since ?? null, ...total },
-          ...groups.map(({ key, ...g }) => ({ [by]: key, ...g })),
-        ]),
-      );
+  if (sub === 'sql') return sql(handle, rest[0], io);
+  if (sub === 'show') return show(handle, rest[0], v, io);
+  const f: Filter = { since: since(v.since, io), path: pathOf(v.path) };
+  if (sub === 'list') io.stdout.write(fit(listRows(handle, f)));
+  if (sub === 'search') io.stdout.write(fit(searchItems(handle, words, f).map(hit)));
+  if (sub === 'spend') {
+    if (v.by !== undefined && !SPEND_BY.includes(v.by as SpendBy)) {
+      throw new DfsError(3, `--by ${v.by}: want ${SPEND_BY.join(', ')}`);
     }
-  } finally {
-    db.close();
+    const [total, ...groups] = spend(handle, f.since, v.by as SpendBy | undefined);
+    const by = v.by as SpendBy;
+    io.stdout.write(
+      fit([
+        { dfs: 'spend', since: f.since ?? null, ...total },
+        ...groups.map(({ key, ...g }) => ({ [by]: key, ...g })),
+      ]),
+    );
   }
 }
 
-function show(db: ReturnType<typeof openStore>, id: string, v: StoreFlags, io: Io): void {
+function show(handle: StoreHandle, id: string, v: StoreFlags, io: Io): void {
   const from = Number(v.from ?? 1);
   if (!Number.isInteger(from) || from < 1) {
     throw new DfsError(3, `--from ${v.from}: want a whole number, 1 or more`);
   }
-  const row = getRow(db, id);
+  const row = getRow(handle, id);
   if (!row) throw new DfsError(3, `no response ${id} in the Store; see: dfs store list`);
   if (row.body === null) throw new DfsError(3, `${id} has no JSON body (HTTP ${row.http_status})`);
   io.stdout.write(v.full ? `${row.body}\n` : compact(JSON.parse(row.body), id, from, BUDGET));
@@ -132,8 +128,8 @@ const hit = (h: ReturnType<typeof searchItems>[number]) => ({
 
 // A query on a read-only connection: SQLite refuses every write. A statement with no result
 // columns (VACUUM INTO, a write) is refused too: `store sql` reads rows.
-function sql(query: string, io: Io): void {
-  const db = openReadOnly(io.env);
+function sql(handle: StoreHandle, query: string, io: Io): void {
+  const db = openReadOnly(handle);
   try {
     let rows: unknown[];
     try {

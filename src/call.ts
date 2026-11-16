@@ -16,11 +16,11 @@ import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
 import {
   insertTasks,
-  openStore,
   type Price,
   type Row,
   readPrice,
   reuseRows,
+  type StoreHandle,
   save,
   type Task,
   writePrice,
@@ -169,20 +169,20 @@ function reuseKey(planned: Plan, sandbox: boolean): string {
 }
 
 // The newest fully successful response of this request in the reuse window.
-export function reusable(io: Io, planned: Plan, sandbox: boolean): Row | undefined {
+export function reusable(
+  io: Io,
+  store: StoreHandle,
+  planned: Plan,
+  sandbox: boolean,
+): Row | undefined {
   const since = new Date((io.now ?? Date.now)() - REUSE_WINDOW).toISOString();
-  const db = openStore(io.env);
-  try {
-    return reuseRows(db, reuseKey(planned, sandbox), since).find((r) => {
-      const text = r.body as string;
-      return (
-        outcome({ status: r.http_status, text }, JSON.parse(text), r.id, planned.method === 'GET')
-          .exit === 0
-      );
-    });
-  } finally {
-    db.close();
-  }
+  return reuseRows(store, reuseKey(planned, sandbox), since).find((r) => {
+    const text = r.body as string;
+    return (
+      outcome({ status: r.http_status, text }, JSON.parse(text), r.id, planned.method === 'GET')
+        .exit === 0
+    );
+  });
 }
 
 // 42s, 5m, 3h04m
@@ -217,6 +217,7 @@ export async function exchange(
   planned: Plan,
   opts: { sandbox: boolean; free: boolean; estimate: number | null; deadline?: number },
   io: Io,
+  store: StoreHandle,
   warn: (w: string) => void,
 ) {
   const auth = authHeader(io.env);
@@ -254,7 +255,7 @@ export async function exchange(
     body: parsed === undefined ? null : kept,
     reuse_key: reuseKey(planned, opts.sandbox),
   };
-  const saved = save(io.env, row, warn);
+  const saved = save(store, row, warn);
   // The `price` node of a successful user_data response.
   const tree =
     ep.path === USER_DATA && !opts.sandbox && succeeded(res.status, parsed)
@@ -263,12 +264,7 @@ export async function exchange(
   const price = isRecord(tree) ? { at: row.time, tree } : undefined;
   if (price) {
     try {
-      const db = openStore(io.env);
-      try {
-        writePrice(db, price);
-      } finally {
-        db.close();
-      }
+      writePrice(store, price);
     } catch (e) {
       warn(`price tree not saved (${messageOf(e)})`);
     }
@@ -281,16 +277,11 @@ export async function exchange(
 export async function priceTree(
   catalog: Catalog,
   io: Io,
+  store: StoreHandle,
   refresh: boolean,
   warn: (w: string) => void,
 ): Promise<Price | undefined> {
-  const db = openStore(io.env);
-  let old: Price | undefined;
-  try {
-    old = readPrice(db);
-  } finally {
-    db.close();
-  }
+  const old = readPrice(store);
   const ep = catalog.endpoints.find((e) => e.path === USER_DATA);
   const fresh = old !== undefined && (io.now ?? Date.now)() - Date.parse(old.at) <= DAY;
   const login = io.env.DATAFORSEO_LOGIN && io.env.DATAFORSEO_PASSWORD;
@@ -304,6 +295,7 @@ export async function priceTree(
       planned,
       { sandbox: false, free: true, estimate: 0 },
       io,
+      store,
       warn,
     );
     if (r.price) return r.price;
@@ -325,12 +317,13 @@ export async function call(
   params: Record<string, string>,
   flags: CallFlags,
   io: Io,
+  store: StoreHandle,
 ): Promise<number> {
   const tasks = await readBody(ep, flags.body, io);
   // --dry-run plans the first page only.
   if (flags['page-all']) {
     const paging = pagingOf(catalog, ep, tasks);
-    if (!flags['dry-run']) return pageAll(catalog, ep, params, paging, flags, io);
+    if (!flags['dry-run']) return pageAll(catalog, ep, params, paging, flags, io, store);
   }
   const sandbox = flags.sandbox === true;
   const { ceiling, explicit } = ceilingOf(flags, io);
@@ -344,14 +337,14 @@ export async function call(
   };
   planned.warnings.forEach(warnEarly);
   // Free paths always go to the API (user story 24).
-  const reuse = flags.fresh || isFree(ep.path) ? undefined : reusable(io, planned, sandbox);
-  if (reuse && !flags['dry-run']) return replay(catalog, ep, reuse, flags, io, early);
+  const reuse = flags.fresh || isFree(ep.path) ? undefined : reusable(io, store, planned, sandbox);
+  if (reuse && !flags['dry-run']) return replay(catalog, ep, reuse, flags, io, store, early);
   // The sandbox and the free list estimate 0; the guard does not apply.
   const free = sandbox || isFree(ep.path);
   const rule = free ? undefined : ruleFor(ep.path);
   const price =
     rule && !rule.unbounded
-      ? await priceTree(catalog, io, !flags['dry-run'], warnEarly)
+      ? await priceTree(catalog, io, store, !flags['dry-run'], warnEarly)
       : undefined;
   const est: Estimate = free
     ? { usd: 0, basis: 'rule' }
@@ -375,7 +368,7 @@ export async function call(
   }
   if (refusal) throw new DfsError(4, refusal);
 
-  const r = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io);
+  const r = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store);
   const stderr = r.lines.map((l) => `${l}\n`).join('');
   io.stderr.write(stderr);
   if (r.parsed !== undefined) {
@@ -397,6 +390,7 @@ export async function sendPlanned(
   est: Estimate,
   opts: { sandbox: boolean; free: boolean },
   io: Io,
+  store: StoreHandle,
 ) {
   const warnings: string[] = [];
   const { res, parsed, row, saved } = await exchange(
@@ -405,6 +399,7 @@ export async function sendPlanned(
     planned,
     { ...opts, estimate: est.usd },
     io,
+    store,
     (w) => warnings.push(`dfs: warning: ${w}`),
   );
   const { id } = row;
@@ -445,12 +440,7 @@ export async function sendPlanned(
         : [],
     );
     try {
-      const db = openStore(io.env);
-      try {
-        insertTasks(db, rows);
-      } finally {
-        db.close();
-      }
+      insertTasks(store, rows);
     } catch (e) {
       // The response row holds the cost; dfs +collect recovers the task row through id_list.
       warnings.push(`dfs: warning: task rows not saved (${messageOf(e)})`);
@@ -469,10 +459,11 @@ function replay(
   src: Row,
   flags: CallFlags,
   io: Io,
+  store: StoreHandle,
   early: string, // warnings already printed; they count against the budget
 ): number {
   const warnings: string[] = [];
-  const status = reuseRow(catalog, ep, src, io, (w) => warnings.push(`dfs: warning: ${w}`));
+  const status = reuseRow(catalog, ep, src, io, store, (w) => warnings.push(`dfs: warning: ${w}`));
   const full = src.body as string;
   const stderr = [status, ...warnings].map((l) => `${l}\n`).join('');
   io.stderr.write(stderr);
@@ -490,6 +481,7 @@ export function reuseRow(
   ep: Endpoint,
   src: Row,
   io: Io,
+  store: StoreHandle,
   warn: (w: string) => void,
 ): string {
   const now = (io.now ?? Date.now)();
@@ -505,7 +497,7 @@ export function reuseRow(
     body: null,
   };
   // The stored response stays the only copy of the data; a lost reuse row loses no data.
-  save(io.env, row, warn);
+  save(store, row, warn);
   const parsed = JSON.parse(src.body as string);
   return `dfs: ${src.status_code} ${ep.path} tasks=${parsed.tasks_count ?? 0} cost=$0 est=$0 reused=${src.id} age=${age(now - Date.parse(src.time))}`;
 }

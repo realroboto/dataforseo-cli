@@ -15,6 +15,7 @@ import { isRecord } from '../src/json.ts';
 import { HAND_ID_LIST } from '../src/lifecycle.ts';
 import { plan } from '../src/planner.ts';
 import { type Io, run } from '../src/run.ts';
+import { StoreHandle } from '../src/store.ts';
 
 export const COVERAGE_FILE = 'spec/sandbox-40404.json';
 export type Coverage = { sha: string; date: string; paths: string[] };
@@ -166,6 +167,7 @@ export async function sandboxRun(
       words: ['ai_optimization', 'id_list'],
       op: {},
     };
+    const store = new StoreHandle(base.env);
     try {
       if (!Array.isArray(ex)) throw new DfsError(3, 'spec has no /v3/serp/id_list example');
       const planned = plan(catalog, ep, {}, inWindow(HAND_ID_LIST, ex, now()), {
@@ -178,6 +180,7 @@ export async function sandboxRun(
         planned,
         { sandbox: true, free: true, estimate: 0 },
         base,
+        store,
         () => {},
       );
       const exit = x.res.status < 300 && errorCodes([x.parsed]).length === 0 ? 0 : 1;
@@ -185,6 +188,8 @@ export async function sandboxRun(
     } catch (e) {
       if (!(e instanceof DfsError)) throw e;
       failures.push(`${HAND_ID_LIST}: exit ${e.exit} ${e.message}`);
+    } finally {
+      store.close();
     }
   }
 

@@ -171,7 +171,7 @@ function indexItems(db: DatabaseSync, id: string, body: string): void {
 }
 
 // Opens (and creates) the Store, then imports the rows a failed save left in unsaved/.
-export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
+function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
   privateDir(configDir(env));
   const file = storeFile(env);
   closeSync(openSync(file, 'a', 0o600)); // SQLite gives the -wal and -shm files this mode
@@ -185,6 +185,35 @@ export function openStore(env: NodeJS.ProcessEnv): DatabaseSync {
   } catch (e) {
     db.close();
     throw e;
+  }
+}
+
+// Store handle (store.md): the one Store connection of a command, opened on first use; `run()`
+// closes it. A failed open is kept: every later use throws it at once, with no new 30 s busy wait.
+// Statements run outside a transaction between calls, so other processes keep writing (WAL).
+export class StoreHandle {
+  readonly env: NodeJS.ProcessEnv; // DFS_CONFIG_DIR: the Store file and unsaved/
+  #db: DatabaseSync | undefined;
+  #failed: { error: unknown } | undefined;
+
+  constructor(env: NodeJS.ProcessEnv) {
+    this.env = env;
+  }
+
+  db(): DatabaseSync {
+    if (this.#failed) throw this.#failed.error;
+    try {
+      this.#db ??= openStore(this.env);
+    } catch (e) {
+      this.#failed = { error: e };
+      throw e;
+    }
+    return this.#db;
+  }
+
+  close(): void {
+    this.#db?.close();
+    this.#db = undefined;
   }
 }
 
@@ -245,21 +274,16 @@ function importUnsaved(db: DatabaseSync, env: NodeJS.ProcessEnv): void {
   }
 }
 
-// Save before print. A failed Store write keeps the row in unsaved/<id>.json (600) for the next
-// run and warns; returns false when that write fails too.
-export function save(env: NodeJS.ProcessEnv, row: Row, warn: (m: string) => void): boolean {
+// Save before print. A failed Store write (or open) keeps the row in unsaved/<id>.json (600) for
+// the next run and warns; returns false when that write fails too.
+export function save(store: StoreHandle, row: Row, warn: (m: string) => void): boolean {
   try {
-    const db = openStore(env);
-    try {
-      insert(db, row);
-    } finally {
-      db.close();
-    }
+    insert(store.db(), row);
     return true;
   } catch (e) {
     try {
-      privateDir(unsavedDir(env));
-      const file = join(unsavedDir(env), `${row.id}.json`);
+      privateDir(unsavedDir(store.env));
+      const file = join(unsavedDir(store.env), `${row.id}.json`);
       writeFileSync(file, JSON.stringify(row), { mode: 0o600, flag: 'wx' });
       warn(
         `Store write failed (${messageOf(e)}); response kept in ${file}, imported on the next run`,
@@ -275,12 +299,13 @@ const COLUMNS = 'id, time, method, spec_path, path, sandbox, http_status, status
 
 const FULL = `${COLUMNS}, request, estimate, reused_from, dfs_version, spec_sha, json(body) AS body, reuse_key`;
 
-export const getRow = (db: DatabaseSync, id: string): Row | undefined =>
-  db.prepare(`SELECT ${FULL} FROM response WHERE id = ?`).get(id) as Row | undefined;
+export const getRow = (store: StoreHandle, id: string): Row | undefined =>
+  store.db().prepare(`SELECT ${FULL} FROM response WHERE id = ?`).get(id) as Row | undefined;
 
 // Sent responses with this key and a body, at or after `since` (ISO 8601), newest first.
-export const reuseRows = (db: DatabaseSync, key: string, since: string): Row[] =>
-  db
+export const reuseRows = (store: StoreHandle, key: string, since: string): Row[] =>
+  store
+    .db()
     .prepare(
       `SELECT ${FULL} FROM response WHERE reuse_key = ? AND time >= ? AND reused_from IS NULL AND body IS NOT NULL ORDER BY time DESC, rowid DESC`,
     )
@@ -296,9 +321,10 @@ const filterSql = ({ since, path }: Filter): { sql: string; args: string[] } => 
 });
 
 // Newest first, no body.
-export function listRows(db: DatabaseSync, f: Filter = {}): Omit<Row, 'body'>[] {
+export function listRows(store: StoreHandle, f: Filter = {}): Omit<Row, 'body'>[] {
   const w = filterSql(f);
-  return db
+  return store
+    .db()
     .prepare(`SELECT ${COLUMNS} FROM response WHERE ${w.sql} ORDER BY time DESC, rowid DESC`)
     .all(...w.args) as Omit<Row, 'body'>[];
 }
@@ -307,10 +333,11 @@ export type Hit = { id: string; time: string; path: string; item: number; snippe
 
 // Items whose strings hold every word (diacritics folded), newest response first. Each word is
 // an FTS5 string, so FTS5 syntax in the words is plain text.
-export function searchItems(db: DatabaseSync, words: string[], f: Filter = {}): Hit[] {
+export function searchItems(store: StoreHandle, words: string[], f: Filter = {}): Hit[] {
   const query = words.map((w) => `"${w.replaceAll('"', '""')}"`).join(' ');
   const w = filterSql(f);
-  return db
+  return store
+    .db()
     .prepare(
       `SELECT r.id, r.time, r.spec_path AS path, item_fts.item AS item,
        snippet(item_fts, 0, '[', ']', '…', 12) AS snippet
@@ -333,7 +360,8 @@ export type Spend = { key?: string | null; cost: number; tasks: number };
 
 // Total first, then one row per group: days newest first, other groups by cost. Costs round to
 // 10 decimals, so float sums print as the API reports them.
-export function spend(db: DatabaseSync, since: string | undefined, by?: SpendBy): Spend[] {
+export function spend(store: StoreHandle, since: string | undefined, by?: SpendBy): Spend[] {
+  const db = store.db();
   const sql = (key: string) =>
     `SELECT ${key} round(total(cost), 10) AS cost, count(*) AS tasks FROM task
      WHERE sandbox = 0 AND posted_at >= ?`;
@@ -346,37 +374,33 @@ export function spend(db: DatabaseSync, since: string | undefined, by?: SpendBy)
   return [total, ...groups];
 }
 
-// A read-only connection to the Store (created and migrated first): writes fail in SQLite.
-export function openReadOnly(env: NodeJS.ProcessEnv): DatabaseSync {
-  openStore(env).close();
-  return new DatabaseSync(storeFile(env), { readOnly: true, timeout: 30_000 });
+// A read-only connection to the Store (created and migrated first, through the handle): writes
+// fail in SQLite. The caller closes it.
+export function openReadOnly(store: StoreHandle): DatabaseSync {
+  store.db();
+  return new DatabaseSync(storeFile(store.env), { readOnly: true, timeout: 30_000 });
 }
 
 // A consistent copy of the Store in `file` (the caller creates it, mode 600) while other processes
 // write: one backup step copies every page inside one read transaction, so writers never restart it.
-export async function backupStore(env: NodeJS.ProcessEnv, file: string): Promise<number> {
-  const db = openStore(env);
-  try {
-    return await backup(db, file, { rate: 2 ** 31 - 1 });
-  } finally {
-    db.close();
-  }
-}
+export const backupStore = async (store: StoreHandle, file: string): Promise<number> =>
+  backup(store.db(), file, { rate: 2 ** 31 - 1 });
 
 export type Price = { at: string; tree: unknown }; // at: ISO 8601 fetch time
 
-export function readPrice(db: DatabaseSync): Price | undefined {
-  const row = db.prepare('SELECT fetched_at, json(tree) AS tree FROM price WHERE id = 1').get() as
-    | { fetched_at: string; tree: string }
-    | undefined;
+export function readPrice(store: StoreHandle): Price | undefined {
+  const row = store
+    .db()
+    .prepare('SELECT fetched_at, json(tree) AS tree FROM price WHERE id = 1')
+    .get() as { fetched_at: string; tree: string } | undefined;
   return row && { at: row.fetched_at, tree: JSON.parse(row.tree) };
 }
 
-export const writePrice = (db: DatabaseSync, { at, tree }: Price): void => {
-  db.prepare('INSERT OR REPLACE INTO price (id, fetched_at, tree) VALUES (1, ?, jsonb(?))').run(
-    at,
-    JSON.stringify(tree),
-  );
+export const writePrice = (store: StoreHandle, { at, tree }: Price): void => {
+  store
+    .db()
+    .prepare('INSERT OR REPLACE INTO price (id, fetched_at, tree) VALUES (1, ?, jsonb(?))')
+    .run(at, JSON.stringify(tree));
 };
 
 export type TaskState = 'pending' | 'collected' | 'failed' | 'expired';
@@ -411,42 +435,49 @@ const TASK_COLUMNS: (keyof Task)[] = [
 ];
 
 // A task already in the Store keeps its row: a replayed post never resets a task's state.
-export function insertTasks(db: DatabaseSync, tasks: Task[]): void {
-  const stmt = db.prepare(
-    `INSERT INTO task (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map(() => '?').join(', ')}) ON CONFLICT (id) DO NOTHING`,
-  );
+export function insertTasks(store: StoreHandle, tasks: Task[]): void {
+  const stmt = store
+    .db()
+    .prepare(
+      `INSERT INTO task (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map(() => '?').join(', ')}) ON CONFLICT (id) DO NOTHING`,
+    );
   for (const t of tasks) stmt.run(...TASK_COLUMNS.map((c) => t[c] ?? null));
 }
 
-export const getTask = (db: DatabaseSync, id: string): Task | undefined =>
-  db.prepare('SELECT * FROM task WHERE id = ?').get(id) as Task | undefined;
+export const getTask = (store: StoreHandle, id: string): Task | undefined =>
+  store.db().prepare('SELECT * FROM task WHERE id = ?').get(id) as Task | undefined;
 
 // A later report replaces the cost only when non-zero (store.md, `task` cost rule).
 export function updateTask(
-  db: DatabaseSync,
+  store: StoreHandle,
   id: string,
   u: Pick<Task, 'state' | 'status_code' | 'collected_at' | 'collect_response' | 'cost'>,
 ): void {
-  db.prepare(
-    `UPDATE task SET state = ?, status_code = ?, collected_at = ?, collect_response = ?,
+  store
+    .db()
+    .prepare(
+      `UPDATE task SET state = ?, status_code = ?, collected_at = ?, collect_response = ?,
      cost = CASE WHEN ? IS NOT NULL AND ? != 0 THEN ? ELSE cost END WHERE id = ?`,
-  ).run(u.state, u.status_code, u.collected_at, u.collect_response, u.cost, u.cost, u.cost, id);
+    )
+    .run(u.state, u.status_code, u.collected_at, u.collect_response, u.cost, u.cost, u.cost, id);
 }
 
 // A cost reported after the charging call (`id_list`) replaces it only when non-zero.
-export const setCost = (db: DatabaseSync, id: string, cost: number | null): void => {
-  if (cost) db.prepare('UPDATE task SET cost = ? WHERE id = ?').run(cost, id);
+export const setCost = (store: StoreHandle, id: string, cost: number | null): void => {
+  if (cost) store.db().prepare('UPDATE task SET cost = ? WHERE id = ?').run(cost, id);
 };
 
 // Pending tasks whose task_post path starts with `prefix`, oldest first.
-export const pendingTasks = (db: DatabaseSync, prefix: string): Task[] =>
-  db
+export const pendingTasks = (store: StoreHandle, prefix: string): Task[] =>
+  store
+    .db()
     .prepare(`SELECT * FROM task WHERE state = 'pending' AND path LIKE ? || '%' ORDER BY rowid`)
     .all(prefix) as Task[];
 
 // Start of the next id_list pass of a module: the last pass, else the Store's creation, which is
 // the time of its first response (lifecycle.md); undefined for an empty Store.
-export function syncStart(db: DatabaseSync, module: string): string | undefined {
+export function syncStart(store: StoreHandle, module: string): string | undefined {
+  const db = store.db();
   const row = db.prepare('SELECT last_pass FROM sync WHERE module = ?').get(module) as
     | { last_pass: string }
     | undefined;
@@ -455,6 +486,9 @@ export function syncStart(db: DatabaseSync, module: string): string | undefined 
   return first.t ?? undefined;
 }
 
-export const setSync = (db: DatabaseSync, module: string, at: string): void => {
-  db.prepare('INSERT OR REPLACE INTO sync (module, last_pass) VALUES (?, ?)').run(module, at);
+export const setSync = (store: StoreHandle, module: string, at: string): void => {
+  store
+    .db()
+    .prepare('INSERT OR REPLACE INTO sync (module, last_pass) VALUES (?, ?)')
+    .run(module, at);
 };

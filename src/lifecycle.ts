@@ -33,8 +33,8 @@ import {
   getRow,
   getTask,
   insertTasks,
-  openStore,
   pendingTasks,
+  type StoreHandle,
   setCost,
   setSync,
   syncStart,
@@ -121,6 +121,7 @@ export async function runTasks(
   word: string | undefined,
   flags: RunFlags,
   io: Io,
+  store: StoreHandle,
 ): Promise<number> {
   const post = level.children.get('task_post')?.endpoint;
   const collects = collectPaths(level);
@@ -163,14 +164,16 @@ export async function runTasks(
     posts.push({ planned });
   }
   for (const w of new Set(posts.flatMap((p) => p.planned.warnings))) warn(w);
-  for (const p of posts) p.reuse = flags.fresh ? undefined : reusable(io, p.planned, sandbox);
+  for (const p of posts) {
+    p.reuse = flags.fresh ? undefined : reusable(io, store, p.planned, sandbox);
+  }
 
   // One guard over every post that is sent; the sandbox estimates 0.
   const toSend = posts.filter((p) => !p.reuse);
   const rule = sandbox ? undefined : ruleFor(post.path);
   const price =
     rule && !rule.unbounded && toSend.length > 0
-      ? await priceTree(catalog, io, true, warn)
+      ? await priceTree(catalog, io, store, true, warn)
       : undefined;
   const cost = (tasks: unknown[]) => estimate(rule, tasks, price?.tree, now());
   if (!sandbox && toSend.length > 0) {
@@ -187,14 +190,22 @@ export async function runTasks(
     let body: unknown;
     let postId: string;
     if (p.reuse) {
-      err(reuseRow(catalog, post, p.reuse, io, warn));
+      err(reuseRow(catalog, post, p.reuse, io, store, warn));
       body = JSON.parse(p.reuse.body as string);
       postId = p.reuse.id;
     } else {
       const est = sandbox ? 0 : cost(p.planned.body ?? []).usd;
       // A lost connection: no later post, no poll; the report and `dfs +collect` follow.
       const x = await answered(
-        exchange(catalog, post, p.planned, { sandbox, free: sandbox, estimate: est }, io, warn),
+        exchange(
+          catalog,
+          post,
+          p.planned,
+          { sandbox, free: sandbox, estimate: est },
+          io,
+          store,
+          warn,
+        ),
         (m) => {
           err(`dfs: ${m}`);
           stop = 1;
@@ -238,14 +249,9 @@ export async function runTasks(
       }
     }
     try {
-      const db = openStore(io.env);
-      try {
-        insertTasks(db, rows);
-        // A replayed post keeps the stored state of its tasks.
-        for (const t of rows) tasks.set(t.id, getTask(db, t.id) ?? t);
-      } finally {
-        db.close();
-      }
+      insertTasks(store, rows);
+      // A replayed post keeps the stored state of its tasks.
+      for (const t of rows) tasks.set(t.id, getTask(store, t.id) ?? t);
     } catch (e) {
       warn(`task rows not saved (${messageOf(e)}); dfs +collect recovers the tasks`);
       for (const t of rows) tasks.set(t.id, t);
@@ -289,6 +295,7 @@ export async function runTasks(
         planned,
         { sandbox, free: true, estimate: 0, deadline: requestEnd() },
         io,
+        store,
         warn,
       ),
       (m) => readyFailed(m),
@@ -317,7 +324,7 @@ export async function runTasks(
       mine.map(async (t) =>
         tasks.set(
           t.id,
-          await collectTask(catalog, t, io, warn, messages, missed, accountStop, end),
+          await collectTask(catalog, t, io, store, warn, messages, missed, accountStop, end),
         ),
       ),
     );
@@ -334,6 +341,7 @@ export async function runTasks(
       : '',
     flags.full === true,
     io,
+    store,
   );
   return exitOf([...tasks.values()], stop, missed);
 }
@@ -364,6 +372,7 @@ async function collectTask(
   catalog: Catalog,
   t: Task,
   io: Io,
+  store: StoreHandle,
   warn: (w: string) => void,
   messages: Map<string, string>,
   missed: Map<string, string>,
@@ -381,7 +390,7 @@ async function collectTask(
   const sandbox = t.sandbox === 1;
   const planned = plan(catalog, ep, { [param(ep)]: t.id }, undefined, { sandbox, validate: true });
   const x = await answered(
-    exchange(catalog, ep, planned, { sandbox, free: true, estimate: 0, deadline }, io, warn),
+    exchange(catalog, ep, planned, { sandbox, free: true, estimate: 0, deadline }, io, store, warn),
     (m) => missed.set(t.id, m),
   );
   if (!x) return t;
@@ -409,12 +418,7 @@ async function collectTask(
     cost: num(r?.cost),
   };
   try {
-    const db = openStore(io.env);
-    try {
-      updateTask(db, t.id, u);
-    } finally {
-      db.close();
-    }
+    updateTask(store, t.id, u);
   } catch (e) {
     warn(`task ${t.id} state not saved (${messageOf(e)})`);
   }
@@ -431,6 +435,7 @@ function report(
   remedy: string,
   full: boolean,
   io: Io,
+  store: StoreHandle,
 ): void {
   const open = tasks.filter((t) => t.state !== 'collected');
   const room = BUDGET - used - remedy.length - 1;
@@ -454,37 +459,27 @@ function report(
   io.stderr.write(shown);
 
   const done = tasks.filter((t) => t.state === 'collected');
-  const db = openStore(io.env);
-  try {
-    let out = '';
-    for (const [i, t] of done.entries()) {
-      const row = t.collect_response ? getRow(db, t.collect_response) : undefined;
-      if (!row?.body) continue;
-      if (full) {
-        out += `${row.body}\n`;
-        continue;
-      }
-      const rest = `${JSON.stringify({ dfs: 'cut', tasks: i, total: done.length, more: 'dfs store list' })}\n`;
-      const part = compact(
-        JSON.parse(row.body),
-        row.id,
-        1,
-        BUDGET - used - out.length - rest.length,
-      );
-      const last = JSON.parse(part.trimEnd().split('\n').at(-1) || '{}');
-      if (last.dfs !== 'cut') {
-        out += part;
-        continue;
-      }
-      // A task cut before its first item shows nothing of use; the Store list line names the rest.
-      if (last.shown > 0) out += part;
-      if (last.shown === 0 || i < done.length - 1) out += rest;
-      break;
+  let out = '';
+  for (const [i, t] of done.entries()) {
+    const row = t.collect_response ? getRow(store, t.collect_response) : undefined;
+    if (!row?.body) continue;
+    if (full) {
+      out += `${row.body}\n`;
+      continue;
     }
-    io.stdout.write(out);
-  } finally {
-    db.close();
+    const rest = `${JSON.stringify({ dfs: 'cut', tasks: i, total: done.length, more: 'dfs store list' })}\n`;
+    const part = compact(JSON.parse(row.body), row.id, 1, BUDGET - used - out.length - rest.length);
+    const last = JSON.parse(part.trimEnd().split('\n').at(-1) || '{}');
+    if (last.dfs !== 'cut') {
+      out += part;
+      continue;
+    }
+    // A task cut before its first item shows nothing of use; the Store list line names the rest.
+    if (last.shown > 0) out += part;
+    if (last.shown === 0 || i < done.length - 1) out += rest;
+    break;
   }
+  io.stdout.write(out);
 }
 
 // Worst class wins, 2 > 1 > 6 > 0 (exit-codes-flags.md). `stop`: exit class of a failed call;
@@ -542,6 +537,7 @@ export async function collectAll(
   module: string | undefined,
   flags: { full?: boolean },
   io: Io,
+  store: StoreHandle,
 ): Promise<number> {
   const now = (io.now ?? Date.now)();
   let used = 0;
@@ -566,13 +562,10 @@ export async function collectAll(
   for (const m of modules) {
     const ep = idListOf(catalog, m);
     if (!ep) continue;
-    const db = openStore(io.env);
-    let from: number;
-    try {
-      from = Math.max(Date.parse(syncStart(db, m) ?? new Date(now).toISOString()), now - ID_WINDOW);
-    } finally {
-      db.close();
-    }
+    const from = Math.max(
+      Date.parse(syncStart(store, m) ?? new Date(now).toISOString()),
+      now - ID_WINDOW,
+    );
     let ok = true;
     // `from < now` only guards entry: an empty window lists nothing.
     for (let offset = 0; from < now; offset += ID_PAGE) {
@@ -588,7 +581,15 @@ export async function collectAll(
       const planned = plan(catalog, ep, {}, body, { sandbox: false, validate: false });
       // A failed request: its line, exit class 1; the module keeps its sync time.
       const x = await answered(
-        exchange(catalog, ep, planned, { sandbox: false, free: true, estimate: 0 }, io, warn),
+        exchange(
+          catalog,
+          ep,
+          planned,
+          { sandbox: false, free: true, estimate: 0 },
+          io,
+          store,
+          warn,
+        ),
         (m) => {
           err(`dfs: ${m}`);
           worst(1);
@@ -619,65 +620,47 @@ export async function collectAll(
       recover(results, x.row.id);
       if (results.length < ID_PAGE) break;
     }
-    if (ok) {
-      const db = openStore(io.env);
-      try {
-        setSync(db, m, new Date(now).toISOString());
-      } finally {
-        db.close();
-      }
-    }
+    if (ok) setSync(store, m, new Date(now).toISOString());
   }
 
   // Lost ids: a known task gets the id_list cost (store.md cost rule); an unknown one a task row.
   function recover(results: Record<string, unknown>[], listResponse: string) {
-    const db = openStore(io.env);
-    try {
-      for (const r of results) {
-        if (typeof r.id !== 'string') continue;
-        if (getTask(db, r.id)) {
-          setCost(db, r.id, num(r.cost));
-          continue;
-        }
-        const path = pathOf(r.url);
-        const level = path && collectLevel(catalog, path);
-        const variant = level ? recoveredVariant(level, isLive(path)) : undefined;
-        if (variant === undefined)
-          warn(`task ${r.id}: ${String(r.url)} maps to no collect call — not collected`);
-        const posted = Date.parse(String(r.datetime_posted));
-        insertTasks(db, [
-          {
-            id: r.id,
-            post_response: listResponse,
-            path: path ?? String(r.url),
-            variant: variant || null,
-            // A task with no collect call keeps its cost and is not tried again.
-            state: variant === undefined ? 'failed' : 'pending',
-            status_code: null,
-            cost: num(r.cost),
-            tag: null,
-            posted_at: new Date(Number.isNaN(posted) ? now : posted).toISOString(),
-            collected_at: null,
-            collect_response: null,
-            sandbox: 0,
-          },
-        ]);
+    for (const r of results) {
+      if (typeof r.id !== 'string') continue;
+      if (getTask(store, r.id)) {
+        setCost(store, r.id, num(r.cost));
+        continue;
       }
-    } finally {
-      db.close();
+      const path = pathOf(r.url);
+      const level = path && collectLevel(catalog, path);
+      const variant = level ? recoveredVariant(level, isLive(path)) : undefined;
+      if (variant === undefined)
+        warn(`task ${r.id}: ${String(r.url)} maps to no collect call — not collected`);
+      const posted = Date.parse(String(r.datetime_posted));
+      insertTasks(store, [
+        {
+          id: r.id,
+          post_response: listResponse,
+          path: path ?? String(r.url),
+          variant: variant || null,
+          // A task with no collect call keeps its cost and is not tried again.
+          state: variant === undefined ? 'failed' : 'pending',
+          status_code: null,
+          cost: num(r.cost),
+          tag: null,
+          posted_at: new Date(Number.isNaN(posted) ? now : posted).toISOString(),
+          collected_at: null,
+          collect_response: null,
+          sandbox: 0,
+        },
+      ]);
     }
   }
 
-  const db = openStore(io.env);
-  let pending: Task[];
-  try {
-    pending = pendingTasks(db, module ? `/v3/${module}/` : '/v3/');
-  } finally {
-    db.close();
-  }
+  const pending = pendingTasks(store, module ? `/v3/${module}/` : '/v3/');
   // In parallel: Transport caps the requests in flight.
   const tasks = await Promise.all(
-    pending.map((t) => collectTask(catalog, t, io, warn, messages, missed, accountStop)),
+    pending.map((t) => collectTask(catalog, t, io, store, warn, messages, missed, accountStop)),
   );
   const left = tasks.filter((t) => t.state === 'pending').length;
   report(
@@ -688,6 +671,7 @@ export async function collectAll(
     left > 0 ? `dfs: 6 ${left} tasks pending — collect them later: dfs +collect` : '',
     flags.full === true,
     io,
+    store,
   );
   return exitOf(tasks, stop, missed);
 }
