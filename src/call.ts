@@ -31,7 +31,8 @@ export async function call(
   const out = new Output(io);
   const dispatch = new Dispatch(catalog, io, store, out, flags);
   const sandbox = flags.sandbox === true;
-  const planned = plan(catalog, ep, params, tasks, { sandbox, validate: !flags['no-validate'] });
+  const validate = !flags['no-validate'];
+  const planned = plan(catalog, ep, params, tasks, { sandbox, validate, params: flags.params });
   const prepared = await dispatch.prepare(ep, planned);
   const refusal = dispatch.guard([prepared]);
   if (flags['dry-run']) {

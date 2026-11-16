@@ -17,7 +17,7 @@ export const SPEC_DIR = join(import.meta.dirname, '..', 'spec');
 export type Operation = {
   description?: string;
   tags?: string[];
-  parameters?: { name?: string; in?: string }[];
+  parameters?: { name?: string; in?: string; description?: string; schema?: Schema }[];
   requestBody?: { content?: { 'application/json'?: { schema?: Schema } } };
 };
 export type Spec = {
@@ -75,8 +75,13 @@ export function checkSpec(doc: unknown, previousPaths?: number): string[] {
     for (const m of methods) {
       const op = isRecord(item) ? item[m] : undefined;
       const params = isRecord(op) && Array.isArray(op.parameters) ? op.parameters : [];
-      if (params.some((p) => !isRecord(p) || p.in !== 'path')) {
-        problems.push(`${path}: a parameter not in the path`);
+      for (const p of params) {
+        const { name, in: where } = isRecord(p) ? p : {};
+        if (where === 'path' && !path.includes(`{${name}}`)) {
+          problems.push(`${path}: path parameter ${name} not in the path`);
+        } else if (where !== 'path' && where !== 'query') {
+          problems.push(`${path}: parameter ${name} in ${where}, want path or query`);
+        }
       }
       const body = isRecord(op) ? op.requestBody : undefined;
       const schema =

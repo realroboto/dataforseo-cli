@@ -15,7 +15,12 @@ import type { StoreHandle } from './store.ts';
 
 const OFFSET_MAX = 10_000; // vendor: offset only up to 10,000 results
 export type Paging = { task: Record<string, unknown>; token?: string };
-export type PageFlags = SpendFlags & { body?: string; full?: boolean; 'no-validate'?: boolean };
+export type PageFlags = SpendFlags & {
+  body?: string;
+  full?: boolean;
+  'no-validate'?: boolean;
+  params?: string; // query parameters, a JSON object (Planner)
+};
 
 export function pagingOf(catalog: Catalog, ep: Endpoint, tasks: unknown[] | undefined): Paging {
   const p = paging(ep, catalog.spec.components.schemas);
@@ -50,6 +55,7 @@ export async function pageAll(
     [
       command(ep.words),
       `--body ${body} --page-all`,
+      flags.params !== undefined && `--params ${quote(flags.params)}`,
       flags.full && '--full',
       flags['no-validate'] && '--no-validate',
       `--max-cost ${need}`,
@@ -66,6 +72,7 @@ export async function pageAll(
     plan(catalog, ep, params, [t], {
       sandbox: flags.sandbox === true,
       validate: !flags['no-validate'],
+      params: flags.params,
     });
   // Page 1 validates before the price tree loads: an invalid body exits 3 with nothing sent. The
   // tree loads next, also when page 1 is reused (as before epic #32).

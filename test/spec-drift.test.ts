@@ -22,9 +22,9 @@ const exampleOf = (spec: Spec, path: string) =>
     unknown
   >[];
 
-test('spec 55a4ed0 with the committed overlay passes conditions 1-7', () => {
+test('spec 8f32867 with the committed overlay passes conditions 1-7', () => {
   const { sha, spec } = readSnapshot();
-  assert.equal(sha.slice(0, 7), '55a4ed0');
+  assert.equal(sha.slice(0, 7), '8f32867');
   assert.deepEqual(specProblems(spec, readOverlay()), []);
 });
 
@@ -156,7 +156,7 @@ test('job summary lists paths added and removed against the snapshot, and the pr
   delete spec.paths['/v3/appendix/status'];
   const { text, failed } = report(spec, 'abcdef0123', '2026-11-09T00:00:00Z');
   assert.equal(failed, true);
-  assert.match(text, /## spec:check abcdef0 \(2026-11-09T00:00:00Z\) against snapshot 55a4ed0/);
+  assert.match(text, /## spec:check abcdef0 \(2026-11-09T00:00:00Z\) against snapshot 8f32867/);
   assert.match(text, /### Paths added \(1\)\n\n- `\/v3\/serp\/google\/new\/live`/);
   assert.match(text, /### Paths removed \(1\)\n\n- `\/v3\/appendix\/status`/);
   assert.match(text, /- `2: \/v3\/serp\/google\/new\/live: no price rule, not free`/);

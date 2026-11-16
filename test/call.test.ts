@@ -575,3 +575,106 @@ test('an unsaved/ row the Store refuses stays on disk', async () => {
   assert.equal(r.code, 0);
   assert.ok(existsSync(file));
 });
+
+// Query parameters (#63): spec 8f32867 adds `resolve_goto_urls` (in: query) to 5 task_get paths.
+const TASK_GET = ['serp', 'google', 'organic', 'task_get', 'regular', 't1'];
+const TASK_GET_URL = 'https://api.dataforseo.com/v3/serp/google/organic/task_get/regular/t1';
+const GOT = JSON.stringify({
+  status_code: 20000,
+  cost: 0,
+  tasks_count: 1,
+  tasks: [{ id: 't1', status_code: 20000, cost: 0, result: [{ items: [{ title: 'x' }] }] }],
+});
+
+test('--params sends query parameters in the request URL, also in the --dry-run plan', async () => {
+  const { fetch, calls } = fakeFetch(() => new Response(GOT));
+  const e = env();
+  const r = await dfs([...TASK_GET, '--params', '{"resolve_goto_urls":true}'], { env: e, fetch });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [`${TASK_GET_URL}?resolve_goto_urls=true`],
+  );
+  const dry = await dfs([...TASK_GET, '--params', '{"resolve_goto_urls":false}', '--dry-run'], {
+    env: e,
+  });
+  assert.equal(JSON.parse(dry.stdout).url, `${TASK_GET_URL}?resolve_goto_urls=false`);
+});
+
+test('--params: an unknown name, a wrong type, a value that is not a scalar, or text that is not a JSON object exits 3; nothing sent', async () => {
+  const { fetch, calls } = fakeFetch(() => new Response(GOT));
+  const e = env();
+  for (const [argv, want] of [
+    [
+      [...TASK_GET, '--params', '{"nope":1}'],
+      /^dfs: params\.nope: unknown query parameter — fix --params/,
+    ],
+    [
+      [...TASK_GET, '--params', '{"resolve_goto_urls":"yes"}'],
+      /^dfs: params\.resolve_goto_urls: want boolean, got string — fix --params/,
+    ],
+    [
+      [...TASK_GET, '--params', '{"resolve_goto_urls":[true]}', '--no-validate'],
+      /^dfs: params\.resolve_goto_urls: want a string, number or boolean/,
+    ],
+    [[...TASK_GET, '--params', '[true]'], /^dfs: --params must be a JSON object/],
+    [[...TASK_GET, '--params', 'resolve_goto_urls=true'], /^dfs: --params is not JSON/],
+    // An endpoint with no query parameters.
+    [['appendix', 'user_data', '--params', '{"x":1}'], /^dfs: params\.x: unknown query parameter/],
+    [
+      ['serp', 'google', 'organic', '+run', '--params', '{}'],
+      /^dfs: --params applies to endpoint calls only/,
+    ],
+    [['+collect', '--params', '{}'], /^dfs: --params applies to endpoint calls only/],
+  ] as const) {
+    const r = await dfs([...argv], { env: e, fetch });
+    assert.equal(r.code, 3, argv.join(' '));
+    assert.match(r.stderr, want);
+    assert.equal(r.stdout, '');
+  }
+  assert.equal(calls.length, 0);
+  // --no-validate sends a name or type the spec lacks, with a warning, as for body fields.
+  const r = await dfs([...TASK_GET, '--params', '{"nope":1}', '--no-validate'], { env: e, fetch });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(
+    r.stderr,
+    /^dfs: warning: params\.nope: unknown query parameter — sent anyway: --no-validate$/m,
+  );
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [`${TASK_GET_URL}?nope=1`],
+  );
+});
+
+test('the Reuse key differs by query string; the Store keeps the path as sent', async () => {
+  const { fetch } = fakeFetch(() => new Response(GOT));
+  const e = env();
+  for (const params of [
+    [],
+    ['--params', '{"resolve_goto_urls":true}'],
+    ['--params', '{"resolve_goto_urls":false}'],
+    ['--params', '{"resolve_goto_urls":true}'],
+  ]) {
+    assert.equal((await dfs([...TASK_GET, ...params], { env: e, fetch })).code, 0);
+  }
+  const rows = await dfs(['store', 'sql', 'SELECT path, reuse_key FROM response ORDER BY rowid'], {
+    env: e,
+  });
+  assert.equal(rows.code, 0, rows.stderr);
+  const got = rows.stdout
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    got.map((x) => x.path),
+    [
+      '/v3/serp/google/organic/task_get/regular/t1',
+      '/v3/serp/google/organic/task_get/regular/t1?resolve_goto_urls=true',
+      '/v3/serp/google/organic/task_get/regular/t1?resolve_goto_urls=false',
+      '/v3/serp/google/organic/task_get/regular/t1?resolve_goto_urls=true',
+    ],
+  );
+  const keys = got.map((x) => x.reuse_key);
+  assert.equal(new Set(keys.slice(0, 3)).size, 3);
+  assert.equal(keys[3], keys[1]);
+});

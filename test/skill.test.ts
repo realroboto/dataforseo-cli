@@ -36,6 +36,10 @@ async function resolves(cmd: string): Promise<string | undefined> {
   if (first === 'store') {
     return help.stdout.includes(`dfs store ${words[1]} `) ? undefined : 'unknown store command';
   }
+  if (first === 'schema') {
+    const schema = await dfs(words);
+    return schema.code === 0 ? undefined : schema.stderr.trim();
+  }
   const at = words.findIndex((w) => w === '+run' || w === '+collect');
   if (at < 0) {
     if (!help.stdout.includes(`\ncall: dfs ${words.join(' ')} `)) return 'not an endpoint';
@@ -79,6 +83,7 @@ test('skill: the check refuses a command that does not resolve', async () => {
     ['dfs serp google organic +run advancd', /unknown \+run variant/],
     ['dfs serp google +collect', /root or one module/],
     ['dfs store bogus', /unknown store command/],
+    ['dfs schema serp google organic live', /is a level, not an endpoint/],
     [`dfs serp google organic live advanced --body '{"keywrd":"x"}'`, /keywrd/],
   ] as const) {
     assert.match((await resolves(cmd)) ?? 'resolved', fault, cmd);

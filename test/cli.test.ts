@@ -16,7 +16,7 @@ writeFileSync(join(env.DFS_CONFIG_DIR, 'spec-check.json'), JSON.stringify({ chec
 // Bin wiring only (seam 2); every CLI behavior is tested in-process in run.test.ts.
 test('--version shows the snapshot SHA and date from the bin', async () => {
   const { stdout } = await promisify(execFile)('node', [BIN, '--version'], { env });
-  assert.match(stdout, /^dfs \d+\.\d+\.\d+ \(spec 55a4ed0, 2026-10-26\)\n$/);
+  assert.match(stdout, /^dfs \d+\.\d+\.\d+ \(spec 8f32867, 2026-11-13\)\n$/);
 });
 
 test('--help exits 0', async () => {
