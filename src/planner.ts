@@ -1,7 +1,9 @@
-// Planner (docs/spec/modules/planner.md): pure. Endpoint + path values + tasks → call plan, or
-// exit 3 naming the field and the remedy. Nothing here touches the network.
+// Planner (docs/spec/modules/planner.md): `--body` to tasks; then pure: endpoint + path values +
+// tasks → call plan, or exit 3 naming the field and the remedy. Nothing here touches the network.
+import { readFileSync } from 'node:fs';
+import { text } from 'node:stream/consumers';
 import { type Catalog, concretePath, type Endpoint, isLive } from './catalog.ts';
-import { DfsError } from './errors.ts';
+import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { deref, type Fault, faults, fields, type Schema, type Schemas } from './schema.ts';
 
@@ -56,6 +58,39 @@ export function paging(ep: Endpoint, schemas: Schemas): { token?: string } | und
   if (ep.method !== 'post') return undefined;
   const known = fields(ep.op.requestBody?.content?.['application/json']?.schema?.items, schemas);
   return known.has('offset') ? { token: TOKENS.find((k) => known.has(k)) } : undefined;
+}
+
+// The tasks of `--body` (inline JSON, `@file`, `-` for stdin): an object is one task, an array
+// the batch. A GET takes no body; a POST needs one.
+export async function readBody(
+  ep: Endpoint,
+  arg: string | undefined,
+  io: { stdin: NodeJS.ReadableStream },
+): Promise<unknown[] | undefined> {
+  if (ep.method !== 'post') {
+    if (arg !== undefined)
+      throw new DfsError(3, `dfs ${ep.words.join(' ')} is GET: it takes no --body`);
+    return undefined;
+  }
+  if (arg === undefined) {
+    throw new DfsError(3, `--body required; task fields: dfs schema ${ep.words.join(' ')}`);
+  }
+  let source = arg;
+  try {
+    if (arg === '-') source = await text(io.stdin);
+    else if (arg.startsWith('@')) source = readFileSync(arg.slice(1), 'utf8');
+  } catch (e) {
+    throw new DfsError(3, `--body ${arg}: ${messageOf(e)}`);
+  }
+  let tasks: unknown;
+  try {
+    tasks = JSON.parse(source);
+  } catch (e) {
+    throw new DfsError(3, `--body is not JSON: ${messageOf(e)}`);
+  }
+  if (isRecord(tasks)) tasks = [tasks];
+  if (!Array.isArray(tasks)) throw new DfsError(3, '--body must be a JSON object or array');
+  return tasks;
 }
 
 export type Plan = {

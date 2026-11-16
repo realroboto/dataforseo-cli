@@ -4,7 +4,7 @@
 - [User stories 1–32](/spec/user-stories.md) - Endpoints, input errors, spend, reuse, Standard tasks.
 - [User stories 33–58](/spec/user-stories-2.md) - Errors, output, store, credentials, spec drift, release.
 - [Names, distribution and stack](/spec/distribution-stack.md) - npm name, repo, skill form, secrets, stack and versions.
-- [Modules](/spec/modules/index.md) - Catalog, Planner, Pricing, Transport, Store, Lifecycle, Render, Envelope, Task ledger.
+- [Modules](/spec/modules/index.md) - Catalog, Planner, Pricing, Transport, Store, Lifecycle, Render, Envelope, Task ledger, Dispatch.
 - [Exit codes and global flags](/spec/exit-codes-flags.md) - Exit code table 0–6, task combining rule and v1 global flags.
 - [Workflows, release runbook and ADRs](/spec/workflows-release.md) - CI, drift check, spec:check conditions, pack check, publish, release steps.
 - [Testing decisions](/spec/testing.md) - Test seams, fixtures, coverage checklist and design tests.

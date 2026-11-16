@@ -20,7 +20,7 @@ status: stable
 - Coverage checklist, not a percentage (34:120–124):
   1. Every spec path (565) yields a command and its `--help`; every request example (272) passes `--dry-run` unmodified, on the overlaid spec.
   2. Every exit code 0–6 has at least one test.
-  3. Every cost-guard rule: ceiling, unknown price, unbounded price, `--page-all` stop, real cost above the estimate.
+  3. Every cost-guard rule: ceiling, unknown price, unbounded price, `--page-all` stop, real cost above the estimate, the `--dry-run` estimate and guard beside a Reuse candidate.
   4. Store: save before print, search, failed save and import, a Store that cannot open (Store handle: a read before the send exits 5, nothing sent), a refused task row write (Task ledger: one warning text, sync time kept), two processes at once, `node:sqlite` smoke test.
   5. Defects of epic #32, one Seam 1 test each, red first:
      - B1: `test/price.test.ts` "--no-validate: count, page, priority and extra fields sent as numeric strings read as their numbers", "--no-validate: an unreadable count or page field makes the price unknown; the guard refuses"; `test/pages.test.ts` "--page-all: offset and limit sent as numeric strings page as numbers (--no-validate)".

@@ -9,3 +9,4 @@
 - [Render](/spec/modules/render.md) - Compact output; Output (budget, stderr lines, exit code); outcome; task exit rule.
 - [Envelope](/spec/modules/envelope.md) - Reads a response body: tasks, results, items in one numbering, exit-table code sets.
 - [Task ledger](/spec/modules/ledger.md) - Task rows, task state, cost rule and `id_list` sync window.
+- [Dispatch](/spec/modules/dispatch.md) - One planned call: Reuse, estimate, cost guard, send, save, task rows, outcome; Fetch free.
