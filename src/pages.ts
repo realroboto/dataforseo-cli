@@ -6,7 +6,7 @@ import type { Catalog, Endpoint } from './catalog.ts';
 import { DfsError } from './errors.ts';
 import { isRecord } from './json.ts';
 import { paging, plan } from './planner.ts';
-import { type Estimate, estimate, guard, isFree, ruleFor } from './pricing.ts';
+import { type Estimate, estimate, guard, isFree, readNumber, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
 
@@ -132,10 +132,11 @@ export async function pageAll(
     const [result] = isRecord(t) && Array.isArray(t.result) ? t.result : [];
     const items = isRecord(result) && Array.isArray(result.items) ? result.items.length : 0;
     fetched += items;
-    const start = Number(task.offset ?? 0);
+    const start = readNumber(task.offset) ?? 0;
+    const limit = readNumber(task.limit);
     const done =
       items === 0 ||
-      (typeof task.limit === 'number' && items < task.limit) ||
+      (limit !== undefined && items < limit) ||
       (isRecord(result) &&
         typeof result.total_count === 'number' &&
         start + fetched >= result.total_count);
