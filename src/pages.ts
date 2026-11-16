@@ -8,7 +8,7 @@ import { DfsError } from './errors.ts';
 import { isRecord } from './json.ts';
 import { paging, plan } from './planner.ts';
 import { type Estimate, estimate, guard, isFree, readNumber, ruleFor } from './pricing.ts';
-import { BUDGET, command, compact } from './render.ts';
+import { command, Output } from './render.ts';
 import type { Io } from './run.ts';
 import type { StoreHandle } from './store.ts';
 
@@ -27,7 +27,6 @@ export function pagingOf(catalog: Catalog, ep: Endpoint, tasks: unknown[] | unde
 const usd = (n: number) => Math.round(n * 1e6) / 1e6;
 const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 const LONG_BODY = 1000; // characters of --body the rerun line repeats
-const CUT_MAX = 100; // longest cut line: 5-digit counts, `r_` + 10 hex
 
 export async function pageAll(
   catalog: Catalog,
@@ -57,30 +56,12 @@ export async function pageAll(
       .filter(Boolean)
       .join(' ');
   const stopLine = (page: number, spent: number, est: number | null, need: number) =>
-    `dfs: --page-all stopped before page ${page}: cost so far $${spent} + page estimate $${est ?? '?'} above ceiling $${ceiling}; pages 1-${page - 1} saved — rerun: ${rerun(need)}\n`;
-  const moreLine = (n: number) => `dfs: +${n} more lines — all pages: dfs store list\n`;
-  // Room kept for the closing lines, so the whole output stays within the budget.
+    `dfs: --page-all stopped before page ${page}: cost so far $${spent} + page estimate $${est ?? '?'} above ceiling $${ceiling}; pages 1-${page - 1} saved — rerun: ${rerun(need)}`;
+  const out = new Output(io, 'page-all');
+  // The longest stop line keeps its room, so the whole output stays within the budget.
   const big = 99_999.999999;
-  const tail = stopLine(99_999, big, big, big).length + moreLine(99_999).length;
-
-  let used = 0;
-  let hidden = 0;
-  const said = new Set<string>();
-  const say = (line: string) => {
-    const text = `${line}\n`;
-    if (used + text.length + tail + CUT_MAX <= BUDGET) {
-      io.stderr.write(text);
-      used += text.length;
-    } else hidden++;
-  };
-  const warn = (w: string) => {
-    if (!said.has(w)) say(`dfs: warning: ${w}`);
-    said.add(w);
-  };
-  const close = (exit: number, line = '') => {
-    io.stderr.write((hidden > 0 ? moreLine(hidden) : '') + line);
-    return exit;
-  };
+  out.reserve(stopLine(99_999, big, big, big));
+  const warn = (w: string) => out.warn(w);
 
   const planOf = (t: Record<string, unknown>) =>
     plan(catalog, ep, params, [t], { sandbox, validate: !flags['no-validate'] });
@@ -92,14 +73,13 @@ export async function pageAll(
   let tokenMode = tokenField !== undefined && task[tokenField] !== undefined;
   let fetched = 0;
   let spent = 0;
-  let cut = false;
   for (let page = 1; ; page++) {
     if (page > 1) planned = planOf(next);
     planned.warnings.forEach(warn);
     const src = flags.fresh || isFree(ep.path) ? undefined : reusable(io, store, planned, sandbox);
     let r: { parsed: unknown; id: string; full: string; cost: number | null; exit: number };
     if (src) {
-      say(reuseRow(catalog, ep, src, io, store, warn));
+      out.line(reuseRow(catalog, ep, src, io, store, warn));
       const full = src.body as string;
       r = { parsed: JSON.parse(full), id: src.id, full, cost: 0, exit: 0 };
     } else {
@@ -115,22 +95,16 @@ export async function pageAll(
         : (guard(ep.path, total, ceiling, explicit) ?? (unknownOver ? 'over' : undefined));
       if (refusal && page === 1) throw new DfsError(4, refusal);
       if (refusal) {
-        return close(4, stopLine(page, usd(spent), est.usd, total.usd ?? usd(spent + ceiling)));
+        const need = total.usd ?? usd(spent + ceiling);
+        return out.close(stopLine(page, usd(spent), est.usd, need), 4);
       }
-      const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store);
-      sent.lines.forEach(say);
+      const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store, out);
       r = { ...sent, cost: sent.cost ?? est.usd };
     }
     spent += r.cost ?? 0;
-    if (flags.full) io.stdout.write(`${r.full.replace(/[\r\n]/g, '')}\n`);
-    else if (!cut && r.parsed !== undefined) {
-      // compact keeps its cut line inside `room`, except when not even one line fits: CUT_MAX.
-      const text = compact(r.parsed, r.id, 1, BUDGET - used - tail - CUT_MAX);
-      io.stdout.write(text);
-      used += text.length;
-      cut = text.split('\n').at(-2)?.startsWith('{"dfs":"cut"') ?? false;
-    }
-    if (r.exit !== 0) return close(r.exit);
+    if (flags.full) out.full(r.full.replace(/[\r\n]/g, ''));
+    else if (r.parsed !== undefined) out.response(r.parsed, r.id);
+    if (r.exit !== 0) return out.close();
 
     // Next page: offset while it stays under 10,000, then the token of this response.
     const result = firstResult(r.parsed);
@@ -142,7 +116,7 @@ export async function pageAll(
       items === 0 ||
       (limit !== undefined && items < limit) ||
       (typeof result?.total_count === 'number' && start + fetched >= result.total_count);
-    if (done) return close(0);
+    if (done) return out.close();
     if (!tokenMode && start + fetched < OFFSET_MAX) {
       next = { ...task, offset: start + fetched };
       continue;
@@ -154,7 +128,7 @@ export async function pageAll(
           ? `no ${tokenField} in the response of page ${page}: later pages not fetched`
           : `offset reached ${OFFSET_MAX}; ${ep.path} has no token field: later pages not fetched`,
       );
-      return close(0);
+      return out.close();
     }
     // Token pages keep every other field of the first request (vendor rule).
     next = { ...task, [tokenField as string]: token };

@@ -2,7 +2,7 @@
 import { closeSync, openSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { DfsError, messageOf } from './errors.ts';
-import { BUDGET, compact } from './render.ts';
+import { Output } from './render.ts';
 import type { Io } from './run.ts';
 import {
   backupStore,
@@ -90,29 +90,28 @@ export async function store(
     io.stdout.write(`${rest[0]}\n`);
     return;
   }
-  if (sub === 'sql') return sql(handle, rest[0], io);
+  const out = new Output(io);
+  if (sub === 'sql') return sql(handle, rest[0], out);
   // A Store fault (exit 5) comes before a flag fault (exit 3), as these commands always did.
   handle.db();
-  if (sub === 'show') return show(handle, rest[0], v, io);
+  if (sub === 'show') return show(handle, rest[0], v, out);
   const f: Filter = { since: since(v.since, io), path: pathOf(v.path) };
-  if (sub === 'list') io.stdout.write(fit(listRows(handle, f)));
-  if (sub === 'search') io.stdout.write(fit(searchItems(handle, words, f).map(hit)));
+  if (sub === 'list') fit(out, listRows(handle, f));
+  if (sub === 'search') fit(out, searchItems(handle, words, f).map(hit));
   if (sub === 'spend') {
     if (v.by !== undefined && !SPEND_BY.includes(v.by as SpendBy)) {
       throw new DfsError(3, `--by ${v.by}: want ${SPEND_BY.join(', ')}`);
     }
     const [total, ...groups] = spend(handle, f.since, v.by as SpendBy | undefined);
     const by = v.by as SpendBy;
-    io.stdout.write(
-      fit([
-        { dfs: 'spend', since: f.since ?? null, ...total },
-        ...groups.map(({ key, ...g }) => ({ [by]: key, ...g })),
-      ]),
-    );
+    fit(out, [
+      { dfs: 'spend', since: f.since ?? null, ...total },
+      ...groups.map(({ key, ...g }) => ({ [by]: key, ...g })),
+    ]);
   }
 }
 
-function show(handle: StoreHandle, id: string, v: StoreFlags, io: Io): void {
+function show(handle: StoreHandle, id: string, v: StoreFlags, out: Output): void {
   const from = Number(v.from ?? 1);
   if (!Number.isInteger(from) || from < 1) {
     throw new DfsError(3, `--from ${v.from}: want a whole number, 1 or more`);
@@ -120,7 +119,8 @@ function show(handle: StoreHandle, id: string, v: StoreFlags, io: Io): void {
   const row = getRow(handle, id);
   if (!row) throw new DfsError(3, `no response ${id} in the Store; see: dfs store list`);
   if (row.body === null) throw new DfsError(3, `${id} has no JSON body (HTTP ${row.http_status})`);
-  io.stdout.write(v.full ? `${row.body}\n` : compact(JSON.parse(row.body), id, from, BUDGET));
+  if (v.full) out.full(row.body);
+  else out.response(JSON.parse(row.body), id, { from });
 }
 
 const hit = (h: ReturnType<typeof searchItems>[number]) => ({
@@ -130,7 +130,7 @@ const hit = (h: ReturnType<typeof searchItems>[number]) => ({
 
 // A query on a read-only connection: SQLite refuses every write. A statement with no result
 // columns (VACUUM INTO, a write) is refused too: `store sql` reads rows.
-function sql(handle: StoreHandle, query: string, io: Io): void {
+function sql(handle: StoreHandle, query: string, out: Output): void {
   const db = openReadOnly(handle);
   try {
     let rows: unknown[];
@@ -144,10 +144,8 @@ function sql(handle: StoreHandle, query: string, io: Io): void {
         `store sql: ${messageOf(e)} — the Store is read-only here; JSONB columns read with json(<column>)`,
       );
     }
-    io.stdout.write(
-      fit(rows, (_, x) =>
-        x instanceof Uint8Array ? `<blob ${x.length} bytes; select json(…)>` : x,
-      ),
+    fit(out, rows, (_, x) =>
+      x instanceof Uint8Array ? `<blob ${x.length} bytes; select json(…)>` : x,
     );
   } finally {
     db.close();
@@ -155,16 +153,11 @@ function sql(handle: StoreHandle, query: string, io: Io): void {
 }
 
 // JSON lines that fit the budget, then a cut line with the count shown and the total.
-function fit(rows: unknown[], replacer?: (k: string, v: unknown) => unknown): string {
-  let out = '';
-  const cut = (shown: number) => `${JSON.stringify({ dfs: 'cut', shown, total: rows.length })}\n`;
-  for (const [i, r] of rows.entries()) {
-    const next = `${JSON.stringify(r, replacer)}\n`;
-    const reserve = i < rows.length - 1 ? cut(i + 1).length : 0;
-    if (out.length + next.length + reserve > BUDGET) return out + cut(i);
-    out += next;
-  }
-  return out;
+function fit(out: Output, rows: unknown[], replacer?: (k: string, v: unknown) => unknown): void {
+  out.block(
+    rows.map((r) => JSON.stringify(r, replacer)),
+    (shown) => JSON.stringify({ dfs: 'cut', shown, total: rows.length }),
+  );
 }
 
 const UNIT = { m: 60_000, h: 3_600_000, d: 86_400_000 } as const;

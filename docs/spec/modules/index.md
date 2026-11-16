@@ -6,6 +6,6 @@
 - [Transport](/spec/modules/transport.md) - One HTTP exchange with auth, pace and retries.
 - [Store](/spec/modules/store.md) - node:sqlite store: save before print, data model, spend, commands.
 - [Lifecycle](/spec/modules/lifecycle.md) - `+run` and `+collect` for Standard tasks.
-- [Render](/spec/modules/render.md) - Compact output, budget, stderr lines and exit code.
+- [Render](/spec/modules/render.md) - Compact output; Output (budget, stderr lines, exit code); outcome; task exit rule.
 - [Envelope](/spec/modules/envelope.md) - Reads a response body: tasks, results, items in one numbering, exit-table code sets.
 - [Task ledger](/spec/modules/ledger.md) - Task rows, task state, cost rule and `id_list` sync window.

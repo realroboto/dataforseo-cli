@@ -549,6 +549,22 @@ test('store list stops within 9,000 characters with a cut line', async () => {
   assert.equal(lines.at(-1), `{"dfs":"cut","shown":${lines.length - 1},"total":50}`);
 });
 
+test('store list and store sql: stdout and stderr together stay within 9,000 characters; the cut line closes', async () => {
+  const e = env();
+  for (let i = 0; i < 50; i++) await callAndId(e, ['appendix', 'user_data'], USER_DATA);
+  for (const argv of [
+    ['store', 'list'],
+    ['store', 'sql', 'SELECT id, json(body) AS body FROM response'],
+  ]) {
+    const r = await dfs(argv, { env: e });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.length + r.stderr.length <= 9000, argv.join(' '));
+    const lines = r.stdout.trimEnd().split('\n');
+    assert.ok(lines.length < 50, argv.join(' '));
+    assert.equal(lines.at(-1), `{"dfs":"cut","shown":${lines.length - 1},"total":50}`);
+  }
+});
+
 test('an unsaved/ row the Store refuses stays on disk', async () => {
   const e = env();
   await dfs(['store', 'list'], { env: e });
