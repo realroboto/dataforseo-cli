@@ -6,14 +6,13 @@ import {
   type CallFlags,
   ceilingOf,
   exchange,
-  outcome,
   priceTree,
   readBody,
   reusable,
   reuseRow,
 } from './call.ts';
 import { type Catalog, collectPaths, type Endpoint, isLive, type Level } from './catalog.ts';
-import { isAccount, resultsOf, succeeded, tasksOf } from './envelope.ts';
+import { resultsOf, succeeded, tasksOf } from './envelope.ts';
 import { DfsError } from './errors.ts';
 import { isRecord, num } from './json.ts';
 import {
@@ -27,7 +26,7 @@ import {
 } from './ledger.ts';
 import { type Plan, plan } from './planner.ts';
 import { estimate, guard, ruleFor } from './pricing.ts';
-import { BUDGET, command, compact } from './render.ts';
+import { command, Output, outcome, taskExit } from './render.ts';
 import type { Io } from './run.ts';
 import { getRow, type StoreHandle } from './store.ts';
 import { type Exchange, TIMEOUT } from './transport.ts';
@@ -82,15 +81,6 @@ function envelopeFailure(x: { res: Exchange; parsed: unknown; row: { id: string 
 }
 const outcomeText = (o: { lines: string[] }) => o.lines.join(' ').replace(/^dfs: /, '');
 
-// Prints a line only when its key is new in this command; repeated lines would fill the budget.
-function onceEach(print: (line: string) => void) {
-  const said = new Set<string>();
-  return (line: string, key = line) => {
-    if (!said.has(key)) print(line);
-    said.add(key);
-  };
-}
-
 // Undefined when Transport gave up (exit 1: network, timeout, deadline); exit 2 and 5 still throw.
 async function answered<T>(request: Promise<T>, failed: (message: string) => void) {
   try {
@@ -133,12 +123,8 @@ export async function runTasks(
   const now = io.now ?? Date.now;
   const sleep = io.sleep ?? pause;
 
-  let used = 0; // characters on stdout and stderr, against the budget
-  const err = (line: string) => {
-    used += line.length + 1;
-    io.stderr.write(`${line}\n`);
-  };
-  const warn = (w: string) => err(`dfs: warning: ${w}`);
+  const out = new Output(io);
+  const warn = (w: string) => out.warn(w);
 
   const posts: { planned: Plan; reuse?: ReturnType<typeof reusable> }[] = [];
   for (let i = 0; i < all.length; i += POST_MAX) {
@@ -150,7 +136,7 @@ export async function runTasks(
     });
     posts.push({ planned });
   }
-  for (const w of new Set(posts.flatMap((p) => p.planned.warnings))) warn(w);
+  for (const w of posts.flatMap((p) => p.planned.warnings)) warn(w);
   for (const p of posts) {
     p.reuse = flags.fresh ? undefined : reusable(io, store, p.planned, sandbox);
   }
@@ -177,7 +163,7 @@ export async function runTasks(
     let body: unknown;
     let postId: string;
     if (p.reuse) {
-      err(reuseRow(catalog, post, p.reuse, io, store, warn));
+      out.line(reuseRow(catalog, post, p.reuse, io, store, warn));
       body = JSON.parse(p.reuse.body as string);
       postId = p.reuse.id;
     } else {
@@ -194,7 +180,7 @@ export async function runTasks(
           warn,
         ),
         (m) => {
-          err(`dfs: ${m}`);
+          out.line(`dfs: ${m}`);
           stop = 1;
         },
       );
@@ -205,12 +191,12 @@ export async function runTasks(
       }
       body = x.parsed;
       postId = x.row.id;
-      err(
+      out.line(
         `dfs: ${x.row.status_code ?? x.res.status} ${post.path} tasks=${isRecord(body) ? (body.tasks_count ?? 0) : 0} cost=$${x.row.cost ?? '?'} est=$${est ?? '?'} saved=${postId}`,
       );
       const o = envelopeFailure(x);
       if (o) {
-        o.lines.forEach(err);
+        for (const l of o.lines) out.line(l);
         stop = o.exit;
       }
     }
@@ -241,11 +227,11 @@ export async function runTasks(
     closing ??= now() + TIMEOUT;
     return closing;
   };
-  const once = onceEach(err);
-  const readyFailed = (m: string, key = m) => once(`dfs: warning: tasks_ready failed: ${m}`, key);
+  const readyFailed = (m: string, key = m) =>
+    out.warn(`tasks_ready failed: ${m}`, `tasks_ready failed: ${key}`);
   // An account failure prints its lines once and stops: no further poll and no last poll.
   const accountStop = (lines: string[]) => {
-    for (const l of lines) once(l);
+    for (const l of lines) out.line(l, l);
     stop = 2;
   };
   let interval = FIRST_POLL;
@@ -300,19 +286,18 @@ export async function runTasks(
   }
 
   const left = pending().length;
-  report(
+  if (stop !== undefined) out.exit(stop);
+  return report(
     [...tasks.values()],
     messages,
     missed,
-    used,
     left > 0
       ? `dfs: 6 ${left} tasks pending${stop === undefined ? ` after ${wait} s` : ''} — collect them later: dfs +collect`
-      : '',
+      : undefined,
     flags.full === true,
-    io,
+    out,
     store,
   );
-  return exitOf([...tasks.values()], stop, missed);
 }
 
 // The longest level that prefixes a task_post or Live path and has a collect call (lifecycle.md,
@@ -380,71 +365,42 @@ async function collectTask(
 }
 
 // stderr: task lines of tasks not collected, cut to the budget, then the remedy line. stdout: the
-// collect responses of collected tasks, in order, sharing the budget. `used`: characters printed.
+// collect responses of collected tasks, in order, sharing the budget. Returns the exit code: the
+// task exit rule, class 1 while a pending task's last collect failed, and the request classes.
 function report(
   tasks: Task[],
   messages: Map<string, string>,
   missed: Map<string, string>,
-  used: number,
-  remedy: string,
+  remedy: string | undefined,
   full: boolean,
-  io: Io,
+  out: Output,
   store: StoreHandle,
-): void {
+): number {
   const open = tasks.filter((t) => t.state !== 'collected');
-  const room = BUDGET - used - remedy.length - 1;
-  let shown = '';
-  for (const [i, t] of open.entries()) {
-    const msg = t.state !== 'failed' ? '' : ` ${messages.get(t.id) ?? ''}`.trimEnd();
+  const lines = open.map((t) => {
     const why = missed.get(t.id);
-    const next = why
-      ? `dfs: task ${t.id} not collected: ${why}\n`
-      : `dfs: task ${t.id} ${t.state} ${t.status_code}${msg}\n`;
-    const more = `dfs: task +${open.length - i - 1} more — states in the Store table task\n`;
-    const reserve = i < open.length - 1 ? more.length : 0;
-    if (shown.length + next.length + reserve > room) {
-      shown += `dfs: task +${open.length - i} more — states in the Store table task\n`;
-      break;
-    }
-    shown += next;
-  }
-  if (remedy) shown += `${remedy}\n`;
-  used += shown.length;
-  io.stderr.write(shown);
+    if (why) return `dfs: task ${t.id} not collected: ${why}`;
+    const msg = t.state !== 'failed' ? '' : ` ${messages.get(t.id) ?? ''}`.trimEnd();
+    return `dfs: task ${t.id} ${t.state} ${t.status_code}${msg}`;
+  });
+  const more = (shown: number) =>
+    `dfs: task +${open.length - shown} more — states in the Store table task`;
+  out.block(lines, more, { stream: 'stderr', after: remedy });
 
   const done = tasks.filter((t) => t.state === 'collected');
-  let out = '';
   for (const [i, t] of done.entries()) {
     const row = t.collect_response ? getRow(store, t.collect_response) : undefined;
     if (!row?.body) continue;
     if (full) {
-      out += `${row.body}\n`;
+      out.full(row.body);
       continue;
     }
-    const rest = `${JSON.stringify({ dfs: 'cut', tasks: i, total: done.length, more: 'dfs store list' })}\n`;
-    const part = compact(JSON.parse(row.body), row.id, 1, BUDGET - used - out.length - rest.length);
-    const last = JSON.parse(part.trimEnd().split('\n').at(-1) || '{}');
-    if (last.dfs !== 'cut') {
-      out += part;
-      continue;
-    }
-    // A task cut before its first item shows nothing of use; the Store list line names the rest.
-    if (last.shown > 0) out += part;
-    if (last.shown === 0 || i < done.length - 1) out += rest;
-    break;
+    const list = { index: i, total: done.length };
+    if (out.response(JSON.parse(row.body), row.id, { list })?.cut) break;
   }
-  io.stdout.write(out);
-}
-
-// Worst class wins, 2 > 1 > 6 > 0 (exit-codes-flags.md). `stop`: exit class of a failed call;
-// `missed`: pending tasks whose last collect failed (class 1).
-function exitOf(tasks: Task[], stop: number | undefined, missed: Map<string, string>): number {
-  const failed = tasks.filter((t) => t.state === 'failed' || t.state === 'expired');
-  if (stop === 2 || failed.some((t) => isAccount(200, t.status_code))) return 2;
-  if (stop === 1 || missed.size > 0 || (tasks.length > 0 && failed.length === tasks.length)) {
-    return 1;
-  }
-  return tasks.some((t) => t.state !== 'collected') ? 6 : 0;
+  if (missed.size > 0) out.exit(1);
+  out.exit(taskExit(tasks));
+  return out.close();
 }
 
 export const COLLECT_USAGE = 'dfs [<module>] +collect [--full]';
@@ -494,22 +450,13 @@ export async function collectAll(
   store: StoreHandle,
 ): Promise<number> {
   const now = (io.now ?? Date.now)();
-  let used = 0;
-  const err = (line: string) => {
-    used += line.length + 1;
-    io.stderr.write(`${line}\n`);
-  };
-  const warn = (w: string) => err(`dfs: warning: ${w}`);
+  const out = new Output(io);
+  const warn = (w: string) => out.warn(w);
   const messages = new Map<string, string>();
   const missed = new Map<string, string>();
-  let stop: number | undefined;
-  const worst = (exit: number) => {
-    if (exit === 2 || (exit === 1 && stop !== 2)) stop = exit;
-  };
-  const once = onceEach(err);
   const accountStop = (lines: string[]) => {
-    for (const l of lines) once(l);
-    worst(2);
+    for (const l of lines) out.line(l, l);
+    out.exit(2);
   };
 
   const modules = module ? [module] : [...catalog.root.children.keys()].toSorted();
@@ -545,8 +492,8 @@ export async function collectAll(
           warn,
         ),
         (m) => {
-          err(`dfs: ${m}`);
-          worst(1);
+          out.line(`dfs: ${m}`);
+          out.exit(1);
         },
       );
       if (!x) {
@@ -565,8 +512,9 @@ export async function collectAll(
       }
       const o = outcome(x.res, x.parsed, x.row.id);
       if (o.exit !== 0) {
-        o.lines.forEach(err);
-        worst(o.exit);
+        for (const l of o.lines) out.line(l);
+        // Only a failed id_list counts (1, 2); a not-ready code keeps the pass exit, as before.
+        if (o.exit !== 6) out.exit(o.exit);
         ok = false;
         break;
       }
@@ -600,15 +548,13 @@ export async function collectAll(
     pending.map((t) => collectTask(catalog, t, io, store, warn, messages, missed, accountStop)),
   );
   const left = tasks.filter((t) => t.state === 'pending').length;
-  report(
+  return report(
     tasks,
     messages,
     missed,
-    used,
-    left > 0 ? `dfs: 6 ${left} tasks pending — collect them later: dfs +collect` : '',
+    left > 0 ? `dfs: 6 ${left} tasks pending — collect them later: dfs +collect` : undefined,
     flags.full === true,
-    io,
+    out,
     store,
   );
-  return exitOf(tasks, stop, missed);
 }

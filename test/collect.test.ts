@@ -635,9 +635,9 @@ test('task row writes the Store refuses: one warning text on each path; the modu
   db.close();
   const r = await dfs(['serp', '+collect'], { env: e, fetch, now: () => now() + 60_000 });
   assert.equal(r.code, 0, r.stderr);
-  // Recovered (lost id sp1), then Collected (t1).
+  // Recovered (lost id sp1) and Collected (t1) fail with one text: printed once per command.
   const warning = 'dfs: warning: task rows not saved (refused); dfs +collect recovers the tasks';
-  assert.equal(r.stderr, `${warning}\n${warning}\n`);
+  assert.equal(r.stderr, `${warning}\n`);
   assert.match(r.stdout, /"id":"t1"/);
   // Nothing written, and serp keeps no sync time: the next pass recovers sp1 and collects t1.
   assert.deepEqual(
@@ -662,4 +662,27 @@ test('task row writes the Store refuses: one warning text on each path; the modu
     ],
   );
   assert.deepEqual(query(e, "SELECT module FROM sync WHERE module = 'serp'"), []);
+});
+
+test('+collect: collected responses and task lines share the 9,000-character budget; the closing lines print', async () => {
+  const e = env();
+  // t1–t100 answer, t101–t200 stay in the queue (40602).
+  const { fetch } = api({ get: (id) => (Number(id.slice(1)) > 100 ? 40602 : undefined) });
+  const body = JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ keyword: `k${i}` })));
+  const argv = ['serp', 'google', 'organic', '+run', 'regular', '--body', body, '--wait', '0'];
+  assert.equal((await dfs(argv, { env: e, fetch, now })).code, 6);
+  const r = await dfs(['+collect'], { env: e, fetch, now });
+  assert.equal(r.code, 6, r.stderr);
+  assert.ok(r.stdout.length + r.stderr.length <= 9000, `${r.stdout.length}+${r.stderr.length}`);
+  assert.equal((r.stderr.match(/^dfs: task t\d+ pending 40602$/gm) ?? []).length, 100);
+  assert.ok(
+    r.stderr.endsWith('dfs: 6 100 tasks pending — collect them later: dfs +collect\n'),
+    r.stderr.slice(-200),
+  );
+  const last = JSON.parse(r.stdout.trimEnd().split('\n').at(-1) as string);
+  assert.deepEqual(
+    { ...last, tasks: 0 },
+    { dfs: 'cut', tasks: 0, total: 100, more: 'dfs store list' },
+  );
+  assert.equal((r.stdout.match(/"dfs":"task"/g) ?? []).length, last.tasks);
 });

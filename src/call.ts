@@ -6,14 +6,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { text } from 'node:stream/consumers';
 import pkg from '../package.json' with { type: 'json' };
 import type { Catalog, Endpoint } from './catalog.ts';
-import { firstResult, isAccount, isNotReady, isOk, succeeded, tasksOf } from './envelope.ts';
+import { firstResult, succeeded } from './envelope.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
 import { posted } from './ledger.ts';
 import { pageAll, pagingOf } from './pages.ts';
 import { type Plan, plan } from './planner.ts';
 import { type Estimate, estimate, guard, isFree, ruleFor } from './pricing.ts';
-import { BUDGET, command, compact } from './render.ts';
+import { command, Output, outcome } from './render.ts';
 import type { Io } from './run.ts';
 import {
   type Price,
@@ -24,7 +24,7 @@ import {
   save,
   writePrice,
 } from './store.ts';
-import { authHeader, type Exchange, send } from './transport.ts';
+import { authHeader, send } from './transport.ts';
 
 export type CallFlags = {
   body?: string;
@@ -97,53 +97,6 @@ function redactLogin(text: string): string {
   } finally {
     db.close();
   }
-}
-
-// 40103 is never retried by itself (transport.md): charging is unverified, so the agent decides.
-const FRESH = 'to send it again, add --fresh';
-
-// stderr lines after the status line, and the exit code: worst class wins, 2 > 1 > 6 > 0.
-// `get`: 20100 is pending on a get, task created (ok) on a post.
-export function outcome(
-  res: Exchange,
-  body: unknown,
-  id: string,
-  get = false,
-): { lines: string[]; exit: number } {
-  const http = res.status;
-  const show = `full response: dfs store show ${id} --full`;
-  const owner = 'the account owner must act: check credentials, balance and limits';
-  if (!isRecord(body)) {
-    if (isAccount(http, undefined)) return { lines: [`dfs: HTTP ${http} — ${owner}`], exit: 2 };
-    // Such a body has no items, and HTML has no stored body: the line carries an excerpt.
-    // Control characters (a terminal escape in a proxy page) collapse like whitespace.
-    const excerpt = res.text
-      .replace(/[\s\p{Cc}]+/gu, ' ')
-      .trim()
-      .slice(0, 200);
-    return { lines: [`dfs: HTTP ${http} — not a JSON object: ${excerpt}`], exit: 1 };
-  }
-  if (isAccount(http, body.status_code)) {
-    return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${owner}`], exit: 2 };
-  }
-  if (!succeeded(http, body)) {
-    const remedy = body.status_code === 40103 ? FRESH : show;
-    return { lines: [`dfs: ${body.status_code} ${body.status_message} — ${remedy}`], exit: 1 };
-  }
-  const tasks = tasksOf(body);
-  const waiting = (t: Record<string, unknown>) => isNotReady(t.status_code, get);
-  const pending = tasks.filter(waiting);
-  const failed = tasks.filter((t) => !waiting(t) && !isOk(t.status_code));
-  const lines = [
-    ...failed.map(
-      (t) =>
-        `dfs: task ${t.id} failed ${t.status_code} ${t.status_message}${t.status_code === 40103 ? ` — ${FRESH}` : ''}`,
-    ),
-    ...pending.map((t) => `dfs: task ${t.id} pending ${t.status_code}`),
-  ];
-  if (failed.some((t) => isAccount(http, t.status_code))) return { lines, exit: 2 };
-  if (failed.length > 0 && failed.length === tasks.length) return { lines, exit: 1 };
-  return { lines, exit: failed.length + pending.length > 0 ? 6 : 0 };
 }
 
 export const USER_DATA = '/v3/appendix/user_data';
@@ -328,30 +281,26 @@ export async function call(
   const { ceiling, explicit } = ceilingOf(flags, io);
   const planned = plan(catalog, ep, params, tasks, { sandbox, validate: !flags['no-validate'] });
   // Warnings before the send print at once, so a failed send still shows them.
-  let early = '';
-  const warnEarly = (w: string) => {
-    const line = `dfs: warning: ${w}\n`;
-    early += line;
-    io.stderr.write(line);
-  };
-  planned.warnings.forEach(warnEarly);
+  const out = new Output(io);
+  const warn = (w: string) => out.warn(w);
+  planned.warnings.forEach(warn);
   // Free paths always go to the API (user story 24).
   const reuse = flags.fresh || isFree(ep.path) ? undefined : reusable(io, store, planned, sandbox);
-  if (reuse && !flags['dry-run']) return replay(catalog, ep, reuse, flags, io, store, early);
+  if (reuse && !flags['dry-run']) return replay(catalog, ep, reuse, flags, io, store, out);
   // The sandbox and the free list estimate 0; the guard does not apply.
   const free = sandbox || isFree(ep.path);
   const rule = free ? undefined : ruleFor(ep.path);
   const price =
     rule && !rule.unbounded
-      ? await priceTree(catalog, io, store, !flags['dry-run'], warnEarly)
+      ? await priceTree(catalog, io, store, !flags['dry-run'], warn)
       : undefined;
   const est: Estimate = free
     ? { usd: 0, basis: 'rule' }
     : estimate(rule, planned.body ?? [], price?.tree, (io.now ?? Date.now)());
-  if (est.warning) warnEarly(est.warning);
+  if (est.warning) warn(est.warning);
   const refusal = free ? undefined : guard(ep.path, est, ceiling, explicit);
   if (flags['dry-run']) {
-    const out = {
+    const dry = {
       method: planned.method,
       url: planned.url,
       body: planned.body ?? null,
@@ -362,26 +311,22 @@ export async function call(
       reuse: reuse?.id ?? null,
       spec: catalog.sha,
     };
-    io.stdout.write(`${JSON.stringify(out)}\n`);
-    return 0;
+    out.full(JSON.stringify(dry));
+    return out.close();
   }
   if (refusal) throw new DfsError(4, refusal);
 
-  const r = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store);
-  const stderr = r.lines.map((l) => `${l}\n`).join('');
-  io.stderr.write(stderr);
+  const r = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store, out);
   if (r.parsed !== undefined) {
-    io.stdout.write(
-      flags.full
-        ? `${r.full}\n`
-        : compact(r.parsed, r.id, 1, BUDGET - early.length - stderr.length),
-    );
+    if (flags.full) out.full(r.full);
+    else out.response(r.parsed, r.id);
   }
-  return r.exit;
+  return out.close();
 }
 
-// One send of a planned call, saved before print: its stderr lines (status line first), the
-// exit code and the response. An unsaved response prints in full and exits 5.
+// One send of a planned call, saved before print. Writes its stderr lines to `out` (status line,
+// this call's warnings, outcome lines) with its exit class; returns the response. An unsaved
+// response prints in full and exits 5.
 export async function sendPlanned(
   catalog: Catalog,
   ep: Endpoint,
@@ -390,6 +335,7 @@ export async function sendPlanned(
   opts: { sandbox: boolean; free: boolean },
   io: Io,
   store: StoreHandle,
+  out: Output,
 ) {
   const warnings: string[] = [];
   const { res, parsed, row, saved } = await exchange(
@@ -399,18 +345,18 @@ export async function sendPlanned(
     { ...opts, estimate: est.usd },
     io,
     store,
-    (w) => warnings.push(`dfs: warning: ${w}`),
+    (w) => warnings.push(w),
   );
   const { id } = row;
   const full = row.body ?? res.text;
   if (!saved) {
-    io.stdout.write(`${full}\n`);
+    out.full(full);
     throw new DfsError(5, '5 response not saved — stdout is the only copy');
   }
   // Sandbox costs are dummy data (r34:51).
   if (!opts.sandbox && est.usd !== null && row.cost !== null && row.cost > est.usd) {
     warnings.push(
-      `dfs: warning: real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
+      `real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
     );
   }
   // Paid tasks get rows now, for `store spend` and `dfs +collect` (store.md, `task`).
@@ -422,12 +368,16 @@ export async function sendPlanned(
       sandbox: opts.sandbox,
       time: (io.now ?? Date.now)(),
     });
-    if (warning) warnings.push(`dfs: warning: ${warning}`);
+    if (warning) warnings.push(warning);
   }
   const { lines, exit } = outcome(res, parsed, id, ep.method === 'get');
   const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;
   const status = `dfs: ${row.status_code ?? res.status} ${ep.path} tasks=${taskCount} cost=$${row.cost ?? '?'} est=$${est.usd ?? '?'} saved=${id}`;
-  return { parsed, id, full, cost: row.cost, lines: [status, ...warnings, ...lines], exit };
+  out.line(status);
+  for (const w of warnings) out.warn(w);
+  for (const l of lines) out.line(l);
+  out.exit(exit);
+  return { parsed, id, full, cost: row.cost, exit };
 }
 
 // A stored response at $0: saves a reuse row (no body, no cost), then prints the stored output.
@@ -438,19 +388,15 @@ function replay(
   flags: CallFlags,
   io: Io,
   store: StoreHandle,
-  early: string, // warnings already printed; they count against the budget
+  out: Output,
 ): number {
   const warnings: string[] = [];
-  const status = reuseRow(catalog, ep, src, io, store, (w) => warnings.push(`dfs: warning: ${w}`));
+  out.line(reuseRow(catalog, ep, src, io, store, (w) => warnings.push(w)));
+  for (const w of warnings) out.warn(w);
   const full = src.body as string;
-  const stderr = [status, ...warnings].map((l) => `${l}\n`).join('');
-  io.stderr.write(stderr);
-  io.stdout.write(
-    flags.full
-      ? `${full}\n`
-      : compact(JSON.parse(full), src.id, 1, BUDGET - early.length - stderr.length),
-  );
-  return 0;
+  if (flags.full) out.full(full);
+  else out.response(JSON.parse(full), src.id);
+  return out.close();
 }
 
 // Saves the reuse row of a stored response; returns its status line.

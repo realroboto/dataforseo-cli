@@ -49,7 +49,7 @@ The default stdout: no envelope, no empty values, one item per line, and task li
 _Avoid_: summary, short output
 
 **Output**:
-The writer in Render, one per command. It owns the 9,000-character budget, prints each warning once, and keeps the worst exit class. Lands in epic #32 R4.
+The writer in Render, one per command. It owns the 9,000-character budget, prints each warning once, and keeps the worst exit class.
 _Avoid_: printer, logger
 
 ### Storage
