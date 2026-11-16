@@ -79,6 +79,10 @@ export async function pageAll(
     return exit;
   };
 
+  const planOf = (t: Record<string, unknown>) =>
+    plan(catalog, ep, params, [t], { sandbox, validate: !flags['no-validate'] });
+  // Page 1 validates before the price tree loads: an invalid body exits 3 with nothing sent.
+  let planned = planOf(task);
   const price = rule && !rule.unbounded ? await priceTree(catalog, io, true, warn) : undefined;
   let next: Record<string, unknown> = task;
   let tokenMode = tokenField !== undefined && task[tokenField] !== undefined;
@@ -86,10 +90,7 @@ export async function pageAll(
   let spent = 0;
   let cut = false;
   for (let page = 1; ; page++) {
-    const planned = plan(catalog, ep, params, [next], {
-      sandbox,
-      validate: !flags['no-validate'],
-    });
+    if (page > 1) planned = planOf(next);
     planned.warnings.forEach(warn);
     const src = flags.fresh || isFree(ep.path) ? undefined : reusable(io, planned, sandbox);
     let r: { parsed: unknown; id: string; full: string; cost: number | null; exit: number };
