@@ -13,34 +13,23 @@ import {
   reuseRow,
 } from './call.ts';
 import { type Catalog, collectPaths, type Endpoint, isLive, type Level } from './catalog.ts';
+import { isAccount, resultsOf, succeeded, tasksOf } from './envelope.ts';
+import { DfsError } from './errors.ts';
+import { isRecord, num } from './json.ts';
 import {
-  firstResult,
-  isAccount,
-  isExpired,
-  isNotReady,
-  isOk,
-  resultsOf,
-  succeeded,
-  tasksOf,
-} from './envelope.ts';
-import { DfsError, messageOf } from './errors.ts';
-import { isRecord } from './json.ts';
+  collected,
+  pendingTasks,
+  posted,
+  recovered,
+  setSync,
+  syncStart,
+  type Task,
+} from './ledger.ts';
 import { type Plan, plan } from './planner.ts';
 import { estimate, guard, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
-import {
-  getRow,
-  getTask,
-  insertTasks,
-  pendingTasks,
-  type StoreHandle,
-  setCost,
-  setSync,
-  syncStart,
-  type Task,
-  updateTask,
-} from './store.ts';
+import { getRow, type StoreHandle } from './store.ts';
 import { type Exchange, TIMEOUT } from './transport.ts';
 
 export type RunFlags = CallFlags & { wait?: string };
@@ -85,8 +74,6 @@ function chooseVariant(level: Level, word: string | undefined): string {
       : `unknown +run variant '${word}'; want one of: ${variants.join(', ')}`,
   );
 }
-
-const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
 // The outcome of a response whose envelope failed (not a JSON object, not 20000, HTTP ≥ 300).
 function envelopeFailure(x: { res: Exchange; parsed: unknown; row: { id: string } }) {
@@ -227,35 +214,17 @@ export async function runTasks(
         stop = o.exit;
       }
     }
-    const rows: Task[] = tasksOf(body)
-      .filter((t) => typeof t.id === 'string')
-      .map((t) => ({
-        id: t.id as string,
-        post_response: postId,
-        path: post.path,
-        variant: variant || null,
-        state: isOk(t.status_code) ? 'pending' : 'failed',
-        status_code: num(t.status_code),
-        cost: num(t.cost),
-        tag: isRecord(t.data) && typeof t.data.tag === 'string' ? t.data.tag : null,
-        posted_at: new Date(now()).toISOString(),
-        collected_at: null,
-        collect_response: null,
-        sandbox: sandbox ? 1 : 0,
-      }));
-    for (const t of tasksOf(body)) {
-      if (typeof t.id === 'string' && typeof t.status_message === 'string') {
-        messages.set(t.id, t.status_message);
-      }
-    }
-    try {
-      insertTasks(store, rows);
-      // A replayed post keeps the stored state of its tasks.
-      for (const t of rows) tasks.set(t.id, getTask(store, t.id) ?? t);
-    } catch (e) {
-      warn(`task rows not saved (${messageOf(e)}); dfs +collect recovers the tasks`);
-      for (const t of rows) tasks.set(t.id, t);
-    }
+    // A replayed post keeps the stored state of its tasks.
+    const stored = posted(store, body, {
+      id: postId,
+      path: post.path,
+      variant: variant || null,
+      sandbox,
+      time: now(),
+    });
+    for (const t of stored.tasks) tasks.set(t.id, t);
+    for (const [id, m] of stored.messages) messages.set(id, m);
+    if (stored.warning) warn(stored.warning);
     if (stop !== undefined) break;
   }
 
@@ -399,30 +368,15 @@ async function collectTask(
   if (o?.exit === 2) accountStop(o.lines);
   else if (o) missed.set(t.id, outcomeText(o));
   if (o || !x.saved) return t; // free: the next collect fetches it again
-  const [r] = tasksOf(x.parsed);
-  const code = num(r?.status_code);
-  const crawled =
-    !ep.path.includes('/summary/') || firstResult(x.parsed)?.crawl_progress === 'finished';
-  let state: Task['state'] = 'pending';
-  if (code === null || isNotReady(code, true)) state = 'pending';
-  else if (isExpired(code)) state = 'expired';
-  else if (!isOk(code)) state = 'failed';
-  else if (crawled) state = 'collected';
-  if (typeof r?.status_message === 'string') messages.set(t.id, r.status_message);
-  const done = state === 'collected';
-  const u = {
-    state,
-    status_code: code ?? t.status_code,
-    collected_at: done ? new Date((io.now ?? Date.now)()).toISOString() : null,
-    collect_response: done ? x.row.id : null,
-    cost: num(r?.cost),
-  };
-  try {
-    updateTask(store, t.id, u);
-  } catch (e) {
-    warn(`task ${t.id} state not saved (${messageOf(e)})`);
-  }
-  return { ...t, ...u, cost: u.cost ? u.cost : t.cost };
+  const c = collected(store, t, {
+    id: x.row.id,
+    path: ep.path,
+    body: x.parsed,
+    time: (io.now ?? Date.now)(),
+  });
+  if (c.message !== undefined) messages.set(t.id, c.message);
+  if (c.warning) warn(c.warning);
+  return c.task;
 }
 
 // stderr: task lines of tasks not collected, cut to the budget, then the remedy line. stdout: the
@@ -617,44 +571,27 @@ export async function collectAll(
         break;
       }
       const results = resultsOf(t);
-      recover(results, x.row.id);
+      // A failed write keeps the module's sync time: the next pass lists these ids again.
+      const warning = recovered(store, results, { id: x.row.id, time: now }, route);
+      if (warning) {
+        warn(warning);
+        ok = false;
+        break;
+      }
       if (results.length < ID_PAGE) break;
     }
-    if (ok) setSync(store, m, new Date(now).toISOString());
+    const unsynced = ok ? setSync(store, m, new Date(now).toISOString()) : undefined;
+    if (unsynced) warn(unsynced);
   }
 
-  // Lost ids: a known task gets the id_list cost (store.md cost rule); an unknown one a task row.
-  function recover(results: Record<string, unknown>[], listResponse: string) {
-    for (const r of results) {
-      if (typeof r.id !== 'string') continue;
-      if (getTask(store, r.id)) {
-        setCost(store, r.id, num(r.cost));
-        continue;
-      }
-      const path = pathOf(r.url);
-      const level = path && collectLevel(catalog, path);
-      const variant = level ? recoveredVariant(level, isLive(path)) : undefined;
-      if (variant === undefined)
-        warn(`task ${r.id}: ${String(r.url)} maps to no collect call — not collected`);
-      const posted = Date.parse(String(r.datetime_posted));
-      insertTasks(store, [
-        {
-          id: r.id,
-          post_response: listResponse,
-          path: path ?? String(r.url),
-          variant: variant || null,
-          // A task with no collect call keeps its cost and is not tried again.
-          state: variant === undefined ? 'failed' : 'pending',
-          status_code: null,
-          cost: num(r.cost),
-          tag: null,
-          posted_at: new Date(Number.isNaN(posted) ? now : posted).toISOString(),
-          collected_at: null,
-          collect_response: null,
-          sandbox: 0,
-        },
-      ]);
-    }
+  // Collect call of a lost id, mapped from its url. None: a warning; the ledger stores it failed.
+  function route(r: Record<string, unknown>) {
+    const path = pathOf(r.url);
+    const level = path && collectLevel(catalog, path);
+    const variant = level ? recoveredVariant(level, isLive(path)) : undefined;
+    if (variant === undefined)
+      warn(`task ${r.id}: ${String(r.url)} maps to no collect call — not collected`);
+    return { path: path ?? String(r.url), variant };
   }
 
   const pending = pendingTasks(store, module ? `/v3/${module}/` : '/v3/');

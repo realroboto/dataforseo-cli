@@ -616,3 +616,33 @@ test('+collect: a collect envelope 40100 exits 2; another envelope failure keeps
     assert.equal(query(e, "SELECT state FROM task WHERE id = 't1'")[0].state, 'pending');
   }
 });
+
+test('task row writes the Store refuses: one warning text on each path; the module keeps its sync time', async () => {
+  const e = env();
+  const { fetch } = api({
+    lost: {
+      serp: [{ id: 'sp1', url: 'https://api.dataforseo.com/v3/serp/google/organic/task_post' }],
+    },
+  });
+  assert.equal((await post(e, fetch)).code, 6);
+  // Responses still save; every task row write fails.
+  const db = new DatabaseSync(join(e.DFS_CONFIG_DIR as string, 'store.db'));
+  for (const op of ['INSERT', 'UPDATE']) {
+    db.exec(
+      `CREATE TRIGGER refuse_${op} BEFORE ${op} ON task BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+    );
+  }
+  db.close();
+  const r = await dfs(['serp', '+collect'], { env: e, fetch, now: () => now() + 60_000 });
+  assert.equal(r.code, 0, r.stderr);
+  // Recovered (lost id sp1), then Collected (t1).
+  const warning = 'dfs: warning: task rows not saved (refused); dfs +collect recovers the tasks';
+  assert.equal(r.stderr, `${warning}\n${warning}\n`);
+  assert.match(r.stdout, /"id":"t1"/);
+  // Nothing written, and serp keeps no sync time: the next pass recovers sp1 and collects t1.
+  assert.deepEqual(
+    query(e, 'SELECT id, state FROM task').map((t) => ({ ...t })),
+    [{ id: 't1', state: 'pending' }],
+  );
+  assert.deepEqual(query(e, "SELECT module FROM sync WHERE module = 'serp'"), []);
+});
