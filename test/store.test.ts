@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -210,6 +210,21 @@ test('store search, list and spend usage faults exit 3', async () => {
   );
 });
 
+test('--since past the date range exits 3 (too far back); 99999999d still lists', async () => {
+  const e = env();
+  for (const age of ['100030000d', `${'9'.repeat(400)}d`]) {
+    for (const sub of [['list'], ['search', 'x'], ['spend']]) {
+      const r = await dfs(['store', ...sub, '--since', age], { env: e });
+      assert.equal(r.code, 3, `${sub[0]} ${age}`);
+      assert.equal(r.stdout, '');
+      assert.equal(r.stderr, `dfs: --since ${age}: too far back\n`);
+    }
+  }
+  const r = await dfs(['store', 'list', '--since', '99999999d'], { env: e });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stderr, '');
+});
+
 test('store sql reads; a write fails on the read-only connection, nothing changes', async () => {
   const e = env();
   const r = await live(e, { keyword: 'k' }, [{ title: 'x' }]);
@@ -367,6 +382,37 @@ test('store backup makes a consistent copy, file 600, while another process writ
   } finally {
     copy.close();
   }
+});
+
+test('a store backup that fails after creating its file removes it, so the rerun works; an existing file stays untouched', async () => {
+  const e = env();
+  const store = join(e.DFS_CONFIG_DIR, 'store.db');
+  writeFileSync(store, 'not a database');
+  const dir = mkdtempSync(join(tmpdir(), 'dfs-copy-'));
+  const file = join(dir, 'copy.db');
+  const failed = await dfs(['store', 'backup', file], { env: e });
+  assert.equal(failed.code, 5);
+  assert.equal(failed.stdout, '');
+  assert.match(failed.stderr, /^dfs: .+\n$/);
+  assert.equal(existsSync(file), false, 'the file dfs created is gone');
+  // An existing file exits 3 and is never touched, even when the Store cannot open.
+  const other = join(dir, 'other.db');
+  writeFileSync(other, 'other data');
+  const exists = await dfs(['store', 'backup', other], { env: e });
+  assert.equal(exists.code, 3);
+  assert.equal(exists.stderr, `dfs: ${other} exists — remove it first or name a new file\n`);
+  assert.equal(readFileSync(other, 'utf8'), 'other data');
+  rmSync(store);
+  const rerun = await dfs(['store', 'backup', file], { env: e });
+  assert.equal(rerun.code, 0, rerun.stderr);
+  assert.equal(rerun.stdout, `${file}\n`);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  // The copy step fails too: SQLite cannot create the journal, its name passes 255 bytes.
+  const long = join(dir, `${'x'.repeat(250)}.db`);
+  const copy = await dfs(['store', 'backup', long], { env: e });
+  assert.equal(copy.code, 5);
+  assert.match(copy.stderr, /^dfs: .+\n$/);
+  assert.equal(existsSync(long), false, 'the file dfs created is gone');
 });
 
 test('a Store at user_version 1 migrates forward on open; old items become searchable', async () => {
