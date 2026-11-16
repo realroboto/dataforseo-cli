@@ -239,7 +239,7 @@ export async function exchange(
   catalog: Catalog,
   ep: Endpoint,
   planned: Plan,
-  opts: { sandbox: boolean; free: boolean; estimate: number | null },
+  opts: { sandbox: boolean; free: boolean; estimate: number | null; deadline?: number },
   io: Io,
   warn: (w: string) => void,
 ) {
@@ -252,6 +252,7 @@ export async function exchange(
     body,
     auth,
     free: opts.free,
+    deadline: opts.deadline,
   });
 
   const parsed = parseJson(res.text);
