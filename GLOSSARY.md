@@ -19,21 +19,21 @@ The `price` node of the `/v3/appendix/user_data` response, kept in the Store `pr
 _Avoid_: price list, rate card
 
 **cost guard**:
-The check that refuses a paid call before the send (exit 4) when the estimate passes the ceiling, or the price is unknown or unbounded and no `--max-cost` is given. Ceiling: `--max-cost`, else `DFS_MAX_COST`, else $1.
+The check that refuses a paid call before the send, with exit 4. It refuses an estimate above the ceiling. Without `--max-cost`, it also refuses an unknown or unbounded price. Ceiling: `--max-cost`, else `DFS_MAX_COST`, else $1.
 _Avoid_: budget (budget is the output limit), spend limit
 
 **Reuse**:
-A paid request that matches a fully successful stored response from the last 12 h returns that response at $0 (ADR 0003).
+A paid request gets the stored response at $0 when the same request fully succeeded in the last 12 h (ADR 0003).
 _Avoid_: cache, cache hit
 
 **Dispatch**:
-The module that runs one planned call from the Reuse check to the outcome: estimate, cost guard, send, save, task rows. Lands in epic #32 R5a.
+The module that runs one planned call: Reuse check, estimate, cost guard, send, save, task rows, outcome. Lands in epic #32 R5a.
 _Avoid_: executor, sender
 
 ### Response and output
 
 **Envelope**:
-The top-level object of a DataForSEO response: `status_code`, `status_message`, `cost`, `tasks_count`, `tasks[]`. Also the module that reads a response body. Envelope success: HTTP < 300 and `status_code` 20000.
+The top-level object of a DataForSEO response (`status_code`, `cost`, `tasks[]`), and the module that reads it. It succeeds when HTTP < 300 and `status_code` is 20000.
 _Avoid_: wrapper, payload
 
 **task**:
@@ -41,21 +41,21 @@ One element of `tasks[]` in a response; also its row in the Store `task` table (
 _Avoid_: job
 
 **Item**:
-One unit of data in a response: `tasks[].result[].items[]` when a result has `items`, else `tasks[].result[]`. Items are numbered 1, 2, … per response; Compact output, `store show --from` and `store search` use the same number.
-_Avoid_: row (a row is a Store record), entry, record
+One element of data in a response: `tasks[].result[].items[]` when a result has `items`, else `tasks[].result[]`. Compact output, `store show --from` and `store search` number items 1, 2, … in one order.
+_Avoid_: row (a row is in the Store), entry
 
 **Compact output**:
-The default stdout: envelope removed, empty values removed, one item per line, task lines, and a cut line at the 9,000-character budget (ADR 0001).
+The default stdout: no envelope, no empty values, one item per line, and task lines. A cut line ends it at the 9,000-character budget (ADR 0001).
 _Avoid_: summary, short output
 
 **Output**:
-The per-command writer in Render: it owns the 9,000-character budget of stdout and stderr, prints each warning once, and keeps the worst exit class. Lands in epic #32 R4.
+The writer in Render, one per command. It owns the 9,000-character budget, prints each warning once, and keeps the worst exit class. Lands in epic #32 R4.
 _Avoid_: printer, logger
 
 ### Storage
 
 **Store**:
-The local `node:sqlite` file that keeps every response, saved before anything prints, plus the price tree, `task` rows and the search index.
+The local `node:sqlite` file that keeps every response, saved before anything prints. It also holds the price tree, `task` rows and the item search index.
 _Avoid_: database, cache
 
 **Store handle**:
@@ -63,5 +63,5 @@ The one Store connection of a command: opened on first use, closed by `run()`. L
 _Avoid_: connection pool, DB client
 
 **Task ledger**:
-The module that owns the `task` and `sync` tables: callers hand it responses, it writes the task rows and applies the cost rule. Lands in epic #32 R3.
+The module that owns the `task` and `sync` tables. Callers hand it responses; it writes task rows and applies the cost rule. Lands in epic #32 R3.
 _Avoid_: task store, task tracker

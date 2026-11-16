@@ -124,6 +124,24 @@ test('user_data: one GET with basic auth, saved before stdout, Compact output', 
   }
 });
 
+test('user_data: no task result keeps its login in the Store or the output; a nested login stays', async () => {
+  const e = env();
+  const [task] = USER_DATA.tasks;
+  const nested = { login: 'two@example.com', note: { login: 'kept' } };
+  const body = { ...USER_DATA, tasks: [task, null, { ...task, id: 't2', result: [null, nested] }] };
+  const { fetch } = fakeFetch(() => json(body));
+  const r = await dfs(['appendix', 'user_data'], { env: e, fetch });
+  assert.equal(r.code, 0, r.stderr);
+  const id = /saved=(r_[0-9a-f]+)/.exec(r.stderr)?.[1] ?? '';
+  const full = await dfs(['store', 'show', id, '--full'], { env: e });
+  const want = structuredClone(body);
+  delete (want.tasks[0] as { result: { login?: string }[] }).result[0].login;
+  delete (want.tasks[2] as { result: { login?: string }[] }).result[1].login;
+  assert.deepEqual(JSON.parse(full.stdout), want);
+  for (const out of [r.stdout, full.stdout]) assert.doesNotMatch(out, /me@example|two@example/);
+  assert.match(r.stdout, /\{"note":\{"login":"kept"\}\}/);
+});
+
 // Runs `dfs <argv>` against one config dir; returns the saved id from the status line.
 const callAndId = async (e: ReturnType<typeof env>, argv: string[], body: unknown) => {
   const { fetch, calls } = fakeFetch(() =>

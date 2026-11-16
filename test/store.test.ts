@@ -183,7 +183,7 @@ test('store search finds items with diacritics folded; --path and --since filter
   assert.match(shown.stdout, /^\{"dfs":"task",.*\n\{"type":"organic","title":"other",/);
 });
 
-test('a store search hit opens through --from the item Compact output numbered; results with and without items', async () => {
+test('store search and --from number items as Compact output does (results with and without items)', async () => {
   const e = env();
   const body = envelope([
     {
