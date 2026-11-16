@@ -20,13 +20,13 @@ status: stable
    - **`price(ep)`** → the price tree when a paid estimate of `ep` needs one (not free, not the sandbox, rule bounded); else none. Same load as `prepare`. `--page-all` calls it right after the page-1 plan. Reason: a reused page 1 still refreshes the tree first, as before epic #32.
    - **`guard(calls, spent = 0)`** → refusal text, or none. Sums the rule estimates of the calls not reused, plus `spent`. An unknown or unbounded estimate refuses without an explicit ceiling. A free path or the sandbox is never refused. Stop rules of one command (`--page-all` stop line) stay in that command.
    - **`send(call, task?)`** → result. Line order: status line, then this call's warnings; the caller prints the outcome lines.
-     - Task context: the `+run` variant and the track flag. Track on: Ledger `posted` on sent and reused responses. Track off (default): on sent paid responses only ([Task ledger](/spec/modules/ledger.md)).
+     - Task context: the `+run` variant and the track flag. Track on: Task ledger `posted` on sent and reused responses. Track off (default): on sent paid responses only ([Task ledger](/spec/modules/ledger.md)).
      - Reused: saves the reuse row, prints `… cost=$0 est=$0 reused=<id> age=<age>`. Cost 0, exit 0.
      - Sent:
        1. Transport, then save before print. An unsaved response prints in full on stdout and exits 5.
        2. Status line `dfs: <code> <path> tasks=<n> cost=$<real> est=$<estimate> saved=<id>`, then the save warnings.
        3. Real cost above the estimate warns (not in the sandbox).
-       4. Ledger `posted` (task context rules); a failed write warns.
+       4. Task ledger `posted` (task context rules); a failed write warns.
        5. outcome through Render.
      - A paid send that loses its connection or times out exits 1 ([ADR 0004](/adr/0004-no-paid-retry-without-cost-0.md)). Line: `connection lost after send … dfs +collect recovers it`.
      - Returns: response id, parsed body, full text, real cost, exit class, outcome lines, tasks with their `status_message`, reused flag, HTTP status.
