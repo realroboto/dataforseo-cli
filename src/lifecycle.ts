@@ -34,6 +34,7 @@ import {
   type Task,
   updateTask,
 } from './store.ts';
+import { TIMEOUT } from './transport.ts';
 
 export type RunFlags = CallFlags & { wait?: string };
 
@@ -82,6 +83,17 @@ function chooseVariant(level: Level, word: string | undefined): string {
 const tasksOf = (body: unknown): Record<string, unknown>[] =>
   (isRecord(body) && Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
 const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+
+// Undefined when Transport gave up (exit 1: network, timeout, deadline); exit 2 and 5 still throw.
+async function answered<T>(request: Promise<T>, failed: (message: string) => void) {
+  try {
+    return await request;
+  } catch (e) {
+    if (!(e instanceof DfsError) || e.exit !== 1) throw e;
+    failed(e.message);
+    return undefined;
+  }
+}
 
 export async function runTasks(
   catalog: Catalog,
@@ -160,14 +172,15 @@ export async function runTasks(
       postId = p.reuse.id;
     } else {
       const est = sandbox ? 0 : cost(p.planned.body ?? []).usd;
-      const x = await exchange(
-        catalog,
-        post,
-        p.planned,
-        { sandbox, free: sandbox, estimate: est },
-        io,
-        warn,
+      // A lost connection: no later post, no poll; the report and `dfs +collect` follow.
+      const x = await answered(
+        exchange(catalog, post, p.planned, { sandbox, free: sandbox, estimate: est }, io, warn),
+        (m) => {
+          err(`dfs: ${m}`);
+          stop = 1;
+        },
       );
+      if (!x) break;
       if (!x.saved) {
         io.stdout.write(`${x.row.body ?? x.res.text}\n`);
         throw new DfsError(5, '5 response not saved — stdout is the only copy');
@@ -221,18 +234,40 @@ export async function runTasks(
   }
 
   const pending = () => [...tasks.values()].filter((t) => t.state === 'pending');
-  const free = { sandbox, free: true, estimate: 0 };
+  const missed = new Map<string, string>(); // pending tasks whose last collect failed: message
 
   // Poll at 5, 10, 20, 30, 30 … s until every own task is done or the wait ends.
   const deadline = now() + wait * 1000;
+  // Requests end at the deadline. The last poll starts at it, so its requests share one Transport
+  // timeout from its first request; else it could never answer.
+  let closing: number | undefined;
+  const requestEnd = () => {
+    if (now() < deadline) return deadline;
+    closing ??= now() + TIMEOUT;
+    return closing;
+  };
+  const said = new Set<string>(); // tasks_ready failure texts already warned: one line each
   let interval = FIRST_POLL;
   while (stop === undefined && pending().length > 0 && now() < deadline) {
     await sleep(Math.min(interval, deadline - now()));
     interval = Math.min(interval * 2, LAST_POLL);
     const planned = plan(catalog, ready, {}, undefined, { sandbox, validate: true });
-    const x = await exchange(catalog, ready, planned, free, io, warn);
+    const x = await answered(
+      exchange(
+        catalog,
+        ready,
+        planned,
+        { sandbox, free: true, estimate: 0, deadline: requestEnd() },
+        io,
+        warn,
+      ),
+      (m) => {
+        if (!said.has(m)) warn(`tasks_ready failed: ${m}`);
+        said.add(m);
+      },
+    );
     // Only this run's ids: tasks_ready lists every uncollected task in its scope.
-    const ids = tasksOf(x.parsed).flatMap((t) =>
+    const ids = tasksOf(x?.parsed).flatMap((t) =>
       (Array.isArray(t.result) ? t.result : []).flatMap((r) => (isRecord(r) ? [r.id] : [])),
     );
     // The last poll also asks for own ids not listed: tasks_ready lists at most 1000 tasks and
@@ -245,8 +280,11 @@ export async function runTasks(
             return t?.state === 'pending' ? [t] : [];
           });
     // In parallel: Transport caps the requests in flight.
+    const end = requestEnd();
     await Promise.all(
-      mine.map(async (t) => tasks.set(t.id, await collectTask(catalog, t, io, warn, messages))),
+      mine.map(async (t) =>
+        tasks.set(t.id, await collectTask(catalog, t, io, warn, messages, missed, end)),
+      ),
     );
   }
 
@@ -254,6 +292,7 @@ export async function runTasks(
   report(
     [...tasks.values()],
     messages,
+    missed,
     used,
     left > 0
       ? `dfs: 6 ${left} tasks pending${stop === undefined ? ` after ${wait} s` : ''} — collect them later: dfs +collect`
@@ -261,7 +300,7 @@ export async function runTasks(
     flags.full === true,
     io,
   );
-  return exitOf([...tasks.values()], stop);
+  return exitOf([...tasks.values()], stop, missed);
 }
 
 // The longest level that prefixes a task_post or Live path and has a collect call (lifecycle.md,
@@ -283,13 +322,16 @@ function collectLevel(catalog: Catalog, path: string): Level | undefined {
 const param = (ep: Endpoint) => /\{(\w+)\}/.exec(ep.path)?.[1] ?? 'id';
 
 // One collect call through the task's stored variant; the task stays pending until its result is
-// ready (on_page: crawl finished). Returns the task with its new state, also saved.
+// ready (on_page: crawl finished). Returns the task with its new state, also saved. A failed
+// request leaves the task pending and in `missed`; an answer takes it out.
 async function collectTask(
   catalog: Catalog,
   t: Task,
   io: Io,
   warn: (w: string) => void,
   messages: Map<string, string>,
+  missed: Map<string, string>,
+  deadline?: number,
 ): Promise<Task> {
   const level = collectLevel(catalog, t.path);
   // No stored variant (a plain task_post call): the variant a recovered id takes.
@@ -301,7 +343,12 @@ async function collectTask(
   }
   const sandbox = t.sandbox === 1;
   const planned = plan(catalog, ep, { [param(ep)]: t.id }, undefined, { sandbox, validate: true });
-  const x = await exchange(catalog, ep, planned, { sandbox, free: true, estimate: 0 }, io, warn);
+  const x = await answered(
+    exchange(catalog, ep, planned, { sandbox, free: true, estimate: 0, deadline }, io, warn),
+    (m) => missed.set(t.id, m),
+  );
+  if (!x) return t;
+  missed.delete(t.id);
   if (!x.saved) return t; // free: the next collect fetches it again
   const [r] = tasksOf(x.parsed);
   const code = num(r?.status_code);
@@ -340,6 +387,7 @@ async function collectTask(
 function report(
   tasks: Task[],
   messages: Map<string, string>,
+  missed: Map<string, string>,
   used: number,
   remedy: string,
   full: boolean,
@@ -350,7 +398,10 @@ function report(
   let shown = '';
   for (const [i, t] of open.entries()) {
     const msg = t.state !== 'failed' ? '' : ` ${messages.get(t.id) ?? ''}`.trimEnd();
-    const next = `dfs: task ${t.id} ${t.state} ${t.status_code}${msg}\n`;
+    const why = missed.get(t.id);
+    const next = why
+      ? `dfs: task ${t.id} not collected: ${why}\n`
+      : `dfs: task ${t.id} ${t.state} ${t.status_code}${msg}\n`;
     const more = `dfs: task +${open.length - i - 1} more — states in the Store table task\n`;
     const reserve = i < open.length - 1 ? more.length : 0;
     if (shown.length + next.length + reserve > room) {
@@ -397,11 +448,14 @@ function report(
   }
 }
 
-// Worst class wins, 2 > 1 > 6 > 0 (exit-codes-flags.md). `stop`: exit class of a failed call.
-function exitOf(tasks: Task[], stop: number | undefined): number {
+// Worst class wins, 2 > 1 > 6 > 0 (exit-codes-flags.md). `stop`: exit class of a failed call;
+// `missed`: pending tasks whose last collect failed (class 1).
+function exitOf(tasks: Task[], stop: number | undefined, missed: Map<string, string>): number {
   const failed = tasks.filter((t) => t.state === 'failed' || t.state === 'expired');
   if (stop === 2 || failed.some((t) => isAccount(200, t.status_code))) return 2;
-  if (stop === 1 || (tasks.length > 0 && failed.length === tasks.length)) return 1;
+  if (stop === 1 || missed.size > 0 || (tasks.length > 0 && failed.length === tasks.length)) {
+    return 1;
+  }
   return tasks.some((t) => t.state !== 'collected') ? 6 : 0;
 }
 
@@ -458,6 +512,7 @@ export async function collectAll(
   };
   const warn = (w: string) => err(`dfs: warning: ${w}`);
   const messages = new Map<string, string>();
+  const missed = new Map<string, string>();
   let stop: number | undefined;
   const worst = (exit: number) => {
     if (exit === 2 || (exit === 1 && stop !== 2)) stop = exit;
@@ -487,14 +542,18 @@ export async function collectAll(
         },
       ];
       const planned = plan(catalog, ep, {}, body, { sandbox: false, validate: false });
-      const x = await exchange(
-        catalog,
-        ep,
-        planned,
-        { sandbox: false, free: true, estimate: 0 },
-        io,
-        warn,
+      // A failed request: its line, exit class 1; the module keeps its sync time.
+      const x = await answered(
+        exchange(catalog, ep, planned, { sandbox: false, free: true, estimate: 0 }, io, warn),
+        (m) => {
+          err(`dfs: ${m}`);
+          worst(1);
+        },
       );
+      if (!x) {
+        ok = false;
+        break;
+      }
       const [t] = tasksOf(x.parsed);
       const code =
         isRecord(x.parsed) && x.parsed.status_code !== 20000
@@ -573,15 +632,18 @@ export async function collectAll(
     db.close();
   }
   // In parallel: Transport caps the requests in flight.
-  const tasks = await Promise.all(pending.map((t) => collectTask(catalog, t, io, warn, messages)));
+  const tasks = await Promise.all(
+    pending.map((t) => collectTask(catalog, t, io, warn, messages, missed)),
+  );
   const left = tasks.filter((t) => t.state === 'pending').length;
   report(
     tasks,
     messages,
+    missed,
     used,
     left > 0 ? `dfs: 6 ${left} tasks pending — collect them later: dfs +collect` : '',
     flags.full === true,
     io,
   );
-  return exitOf(tasks, stop);
+  return exitOf(tasks, stop, missed);
 }

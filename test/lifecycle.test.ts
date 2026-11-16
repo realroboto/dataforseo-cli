@@ -43,12 +43,14 @@ function api(
     crawl?: (id: string) => string;
     get?: (id: string) => { status_code: number; status_message: string } | undefined;
     post?: unknown; // the answer of every task_post
+    down?: (path: string) => boolean; // true: this call fails as a network error
   } = {},
 ) {
   const posted: string[] = [];
   let n = 0;
   const { fetch, calls } = fakeFetch(async (url, init) => {
     const path = new URL(url).pathname;
+    if (opts.down?.(path)) throw new TypeError('fetch failed');
     if (path.endsWith('/user_data')) return json(USER_DATA);
     if (path.endsWith('/task_post') && opts.post) return json(opts.post);
     if (path.endsWith('/task_post')) {
@@ -489,6 +491,156 @@ test('a failed post prints its error, sends no later post, waits for nothing; ex
   assert.equal(r.code, 2, r.stderr);
   assert.deepEqual(paths(calls), ['/v3/serp/google/organic/task_post']);
   assert.match(r.stderr, /\ndfs: 40200 Payment Required\. — the account owner must act/);
+});
+
+const NOT_COLLECTED = (id: string) =>
+  `dfs: task ${id} not collected: network error: fetch failed — check the network; see: dfs store list\n`;
+
+test('a collect that fails after its retries keeps the task pending, and the report prints; exit 1', async () => {
+  const { fetch, calls } = api({ down: (path) => path.endsWith('/t2') });
+  const r = await dfs([...ORGANIC, '--body', bodyOf(3), '--wait', '5'], {
+    env: env(),
+    fetch,
+    ...clock(),
+  });
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stdout, /t1\.example[\s\S]*t3\.example/);
+  assert.ok(
+    r.stderr.endsWith(
+      `${NOT_COLLECTED('t2')}dfs: 6 1 tasks pending after 5 s — collect them later: dfs +collect\n`,
+    ),
+    r.stderr,
+  );
+  assert.equal(
+    paths(calls).filter((p) => p.endsWith('/t2')).length,
+    5,
+    'Transport retries 4 times',
+  );
+});
+
+test('a collect that fails, then succeeds on a later poll: exit 0', async () => {
+  let n = 0;
+  const { fetch } = api({ down: (path) => path.endsWith('/t2') && ++n <= 5 });
+  const r = await dfs([...ORGANIC, '--body', bodyOf(2)], { env: env(), fetch, ...clock() });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(n, 6);
+  assert.match(r.stdout, /t2\.example/);
+  assert.doesNotMatch(r.stderr, /not collected/);
+});
+
+test('a failed tasks_ready warns, and polling continues', async () => {
+  let n = 0;
+  // Two polls fail (5 attempts each); one warning per text keeps the budget.
+  const { fetch, calls } = api({ down: (path) => path.endsWith('/tasks_ready') && ++n <= 10 });
+  const r = await dfs([...ORGANIC, '--body', bodyOf(1)], { env: env(), fetch, ...clock() });
+  assert.equal(r.code, 0, r.stderr);
+  const warning =
+    'dfs: warning: tasks_ready failed: network error: fetch failed — check the network; see: dfs store list\n';
+  assert.equal(r.stderr.split(warning).length, 2, r.stderr);
+  assert.deepEqual(paths(calls).slice(-2), [
+    '/v3/serp/google/organic/tasks_ready',
+    '/v3/serp/google/organic/task_get/advanced/t1',
+  ]);
+});
+
+test('a post that loses its connection: no later post, no poll, then the report; exit 1', async () => {
+  let n = 0;
+  const { fetch, calls } = api({ down: (path) => path.endsWith('/task_post') && ++n === 2 });
+  const r = await dfs([...ORGANIC, '--body', bodyOf(250)], { env: env(), fetch, ...clock() });
+  assert.equal(r.code, 1, r.stderr);
+  assert.deepEqual(paths(calls), Array(2).fill('/v3/serp/google/organic/task_post'));
+  assert.match(
+    r.stderr,
+    /\ndfs: connection lost after send: fetch failed — money may be spent; dfs \+collect recovers it\ndfs: task t1 pending 20100\n/,
+  );
+  assert.ok(
+    r.stderr.endsWith(
+      'dfs: task t100 pending 20100\ndfs: 6 100 tasks pending — collect them later: dfs +collect\n',
+    ),
+    r.stderr,
+  );
+});
+
+// Deadline (transport.md): no retry starts after it.
+test('a free request of +run starts no retry after the --wait deadline', async () => {
+  let n = 0;
+  const { fetch, calls } = api({ down: (path) => path.endsWith('/tasks_ready') && ++n === 1 });
+  const c = clock();
+  const r = await dfs([...ORGANIC, '--body', bodyOf(1), '--wait', '6'], {
+    env: env(),
+    fetch,
+    ...c,
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(c.sleeps, [5000, 1000], 'the 1 s left is too short for a retry');
+  assert.match(r.stderr, /dfs: warning: tasks_ready failed: network error: fetch failed/);
+  assert.equal(paths(calls).filter((p) => p.endsWith('/tasks_ready')).length, 2);
+});
+
+// Never answers until the timeout aborts it; a request with no timeout fails at once.
+function stall(init?: RequestInit): Promise<Response> {
+  const signal = init?.signal;
+  if (!signal) return Promise.reject(new Error('no timeout on this request'));
+  return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+}
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('free requests of +run end at the --wait deadline; the last poll gets one 130 s timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-11-07T12:00:00Z') });
+  // One clock: sleeps and request timers both move mock time.
+  const time = { now: () => Date.now(), sleep: async (ms: number) => t.mock.timers.tick(ms) };
+  const cases = [
+    // The 5 s poll of --wait 20 has 15 s left; it ends at the deadline, so its collect is direct.
+    {
+      wait: '20',
+      stalled: '/tasks_ready',
+      listed: true,
+      limit: 15_000,
+      code: 0,
+      line: 'dfs: warning: tasks_ready failed: network error: no answer before the deadline — ',
+    },
+    // Outcome left to the last-poll rule (B4).
+    { wait: '20', stalled: '/task_get/', listed: true, limit: 15_000 },
+    // The last poll starts at the deadline: one Transport timeout from then.
+    {
+      wait: '5',
+      stalled: '/task_get/',
+      listed: false,
+      limit: 130_000,
+      code: 1,
+      line: 'dfs: task t1 not collected: network error: no answer in 130 s — ',
+    },
+  ];
+  for (const { wait, stalled, listed, limit, code, line } of cases) {
+    const name = `--wait ${wait} ${stalled}`;
+    const t0 = Date.now();
+    const inner = api({ ready: listed ? undefined : () => [] });
+    let first = true; // only the first request to `stalled` stalls
+    const { fetch, calls } = fakeFetch((url, init) => {
+      if (!first || !url.includes(stalled)) return inner.fetch(url, init);
+      first = false;
+      return stall(init);
+    });
+    const run = dfs([...ORGANIC, '--body', bodyOf(1), '--wait', wait], {
+      env: env(),
+      fetch,
+      ...time,
+    });
+    while (first) await tick();
+    const signal = calls.find((c) => c.url.includes(stalled))?.init?.signal;
+    t.mock.timers.tick(limit - 1);
+    await tick();
+    assert.equal(signal?.aborted, false, name);
+    t.mock.timers.tick(1);
+    await tick();
+    assert.equal(signal?.aborted, true, name);
+    const r = await run;
+    if (code === undefined) continue;
+    assert.equal(r.code, code, r.stderr);
+    assert.ok(r.stderr.includes(line), r.stderr);
+    assert.equal(calls.filter((c) => c.url.includes(stalled)).length, 1, `${name}: no retry`);
+    assert.equal(Date.now() - t0, 5000 + limit, name);
+  }
 });
 
 test('--wait takes a finite number of seconds, 0 or more', async () => {

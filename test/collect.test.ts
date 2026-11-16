@@ -513,6 +513,63 @@ test('an id_list failure prints its error, keeps the sync row, and the pass goes
   assert.ok(!sync.includes('backlinks') && sync.includes('serp'));
 });
 
+test('a network failure on id_list or a collect: the pass goes on and reports; exit 1', async () => {
+  const e = env();
+  let down = true;
+  const { fetch, calls } = api({
+    idList: (m) => {
+      if (down && m === 'backlinks') throw new TypeError('fetch failed');
+      return undefined;
+    },
+    get: (id) => {
+      if (down && id === 't1') throw new TypeError('fetch failed');
+      return undefined;
+    },
+  });
+  await post(e, fetch);
+  const argv = ['serp', 'google', 'organic', '+run', 'regular', '--body', '{"keyword":"k2"}'];
+  await dfs([...argv, '--wait', '0'], { env: e, fetch, now }); // t2
+  const r = await dfs(['+collect'], { env: e, fetch, now: () => now() + 60_000 });
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(
+    r.stderr,
+    /^dfs: network error: fetch failed — check the network; see: dfs store list\n/,
+  );
+  assert.ok(
+    r.stderr.endsWith(
+      'dfs: task t1 not collected: network error: fetch failed — check the network; see: dfs store list\n' +
+        'dfs: 6 1 tasks pending — collect them later: dfs +collect\n',
+    ),
+    r.stderr,
+  );
+  assert.match(r.stdout, /"keyword":"t2"/);
+  assert.equal(paths(calls).filter((p) => p.endsWith('/backlinks/id_list')).length, 5);
+  const sync = query(e, 'SELECT module FROM sync').map((s) => s.module);
+  assert.ok(!sync.includes('backlinks') && sync.includes('serp'));
+  assert.equal(query(e, "SELECT state FROM task WHERE id = 't1'")[0].state, 'pending');
+
+  down = false;
+  const again = await dfs(['+collect'], { env: e, fetch, now: () => now() + 120_000 });
+  assert.equal(again.code, 0, again.stderr);
+  assert.ok(query(e, 'SELECT module FROM sync').some((s) => s.module === 'backlinks'));
+});
+
+test('missing credentials during +collect end the command at once: exit 2, no report', async () => {
+  const e = env();
+  const { fetch } = api();
+  await post(e, fetch);
+  const r = await dfs(['+collect'], {
+    env: { DFS_CONFIG_DIR: e.DFS_CONFIG_DIR },
+    fetch,
+    now: () => now() + 60_000,
+  });
+  assert.equal(r.code, 2, r.stderr);
+  assert.equal(
+    r.stderr,
+    'dfs: DATAFORSEO_LOGIN is not set — export DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD\n',
+  );
+});
+
 test('id_list reaches at most 180 days back', async () => {
   const e = env();
   const { fetch, calls } = api();

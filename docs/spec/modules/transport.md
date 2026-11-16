@@ -20,3 +20,4 @@ status: stable
      - **Agent design:** a paid call counts every failed `fetch` as a lost connection, refused or unresolved connections included. Reason: `fetch` gives no sure signal that nothing was sent; the worst case is assumed (scope-risks).
    - Pace: `X-RateLimit-Remaining` 0 → wait for the next minute; at most 10 requests in flight per process.
    - Timeout: 130 s on every request (Live maximum, 31:152; Standard calls answer faster). Timer: `AbortController` + `setTimeout`, not `AbortSignal.timeout` (mock-timer testable). A free call retries a timeout as a network error. A paid call exits 1 as a lost connection.
+   - Deadline (optional, per request; #38). Each attempt's timeout is the smaller of 130 s and the time left. No retry starts when its backoff ends at or after the deadline. An abort by the deadline reads `no answer before the deadline`. Reason: deadline propagation keeps `+run` within `--wait` (lifecycle.md, Request failures).

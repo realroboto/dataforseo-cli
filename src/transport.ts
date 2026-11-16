@@ -50,7 +50,7 @@ function retryable(status: number, text: string, free: boolean): boolean {
 const MINUTE = 60_000;
 const IN_FLIGHT = 10;
 // The vendor's Live maximum; Standard calls answer faster, so it never cuts a good answer.
-const TIMEOUT = 130_000;
+export const TIMEOUT = 130_000;
 type Pace = { until: number; open: number; queue: (() => void)[] };
 // One pace per fetch: a process has one; each test fake gets its own.
 const paces = new WeakMap<Fetch, Pace>();
@@ -66,14 +66,21 @@ async function slot(pace: Pace): Promise<() => void> {
 
 export async function send(
   { fetch, sleep = wait, now = Date.now }: { fetch: Fetch; sleep?: Sleep; now?: () => number },
-  req: { method: string; url: string; body?: string; auth: string; free: boolean },
+  // deadline: epoch ms (`now` clock); no attempt outlasts it, no retry starts after it.
+  req: {
+    method: string;
+    url: string;
+    body?: string;
+    auth: string;
+    free: boolean;
+    deadline?: number;
+  },
 ): Promise<Exchange> {
   const headers: Record<string, string> = { authorization: req.auth };
   if (req.body !== undefined) headers['content-type'] = 'application/json';
   const pace = paces.get(fetch) ?? { until: 0, open: 0, queue: [] };
   paces.set(fetch, pace);
   for (let attempt = 0; ; attempt++) {
-    const last = attempt === RETRIES;
     let res: Exchange | undefined;
     let lost: unknown;
     const release = await slot(pace);
@@ -82,10 +89,10 @@ export async function send(
     if (pause > 0) await sleep(pause);
     // setTimeout, not AbortSignal.timeout: tests drive it with mock timers.
     const abort = new AbortController();
-    const timer = setTimeout(
-      () => abort.abort(new Error(`no answer in ${TIMEOUT / 1000} s`)),
-      TIMEOUT,
-    );
+    const left = Math.max(0, (req.deadline ?? Infinity) - now());
+    const why =
+      left < TIMEOUT ? 'no answer before the deadline' : `no answer in ${TIMEOUT / 1000} s`;
+    const timer = setTimeout(() => abort.abort(new Error(why)), Math.min(TIMEOUT, left));
     try {
       const init = { method: req.method, headers, body: req.body, signal: abort.signal };
       const r = await fetch(req.url, init);
@@ -99,6 +106,9 @@ export async function send(
       clearTimeout(timer);
       release();
     }
+    const delay = backoff(attempt);
+    const last =
+      attempt === RETRIES || (req.deadline !== undefined && now() + delay >= req.deadline);
     if (res === undefined) {
       // A paid request may have reached the API and been charged: never send it twice.
       // shortcut: a refused or unresolved connection (nothing sent) also reads as lost; split by
@@ -118,6 +128,6 @@ export async function send(
     } else if (last || !retryable(res.status, res.text, req.free)) {
       return res;
     }
-    await sleep(backoff(attempt));
+    await sleep(delay);
   }
 }
