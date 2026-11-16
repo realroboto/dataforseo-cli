@@ -190,8 +190,7 @@ test('at most 10 requests in flight per process; a queued request obeys the rate
   assert.deepEqual(waits, [40_000, 40_000], 'only the 2 queued requests wait');
 });
 
-// Never answers; rejects when the request's timeout aborts it. A request with no timeout fails at
-// once (it would hang forever).
+// Never answers until the timeout aborts it; a request with no timeout fails at once.
 function stall(init?: RequestInit): Promise<Response> {
   const signal = init?.signal;
   if (!signal) return Promise.reject(new Error('no timeout on this request'));

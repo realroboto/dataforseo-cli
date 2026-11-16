@@ -19,4 +19,4 @@ status: stable
      - **Agent design:** retry code = envelope code; under a 20000 envelope, retry only when every task has a listed code. Reason: a batch with a good task would pay that task twice (paid) or refetch it for nothing (free).
      - **Agent design:** a paid call counts every failed `fetch` as a lost connection, refused or unresolved connections included. Reason: `fetch` gives no sure signal that nothing was sent; the worst case is assumed (scope-risks).
    - Pace: `X-RateLimit-Remaining` 0 → wait for the next minute; at most 10 requests in flight per process.
-   - Timeout: 130 s on every request (Live maximum, 31:152; Standard calls answer faster). Timer: `AbortController` + `setTimeout`, not `AbortSignal.timeout` (mock-timer testable). A timeout counts as a network error: a free call retries it; a paid call exits 1 as a lost connection.
+   - Timeout: 130 s on every request (Live maximum, 31:152; Standard calls answer faster). Timer: `AbortController` + `setTimeout`, not `AbortSignal.timeout` (mock-timer testable). A free call retries a timeout as a network error. A paid call exits 1 as a lost connection.

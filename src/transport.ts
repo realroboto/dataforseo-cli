@@ -82,7 +82,10 @@ export async function send(
     if (pause > 0) await sleep(pause);
     // setTimeout, not AbortSignal.timeout: tests drive it with mock timers.
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(new Error('no answer in 130 s')), TIMEOUT);
+    const timer = setTimeout(
+      () => abort.abort(new Error(`no answer in ${TIMEOUT / 1000} s`)),
+      TIMEOUT,
+    );
     try {
       const init = { method: req.method, headers, body: req.body, signal: abort.signal };
       const r = await fetch(req.url, init);
