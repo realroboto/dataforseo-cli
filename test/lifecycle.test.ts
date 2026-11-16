@@ -530,13 +530,13 @@ test('a collect that fails, then succeeds on a later poll: exit 0', async () => 
 
 test('a failed tasks_ready warns, and polling continues', async () => {
   let n = 0;
-  const { fetch, calls } = api({ down: (path) => path.endsWith('/tasks_ready') && ++n <= 5 });
+  // Two polls fail (5 attempts each); one warning per text keeps the budget.
+  const { fetch, calls } = api({ down: (path) => path.endsWith('/tasks_ready') && ++n <= 10 });
   const r = await dfs([...ORGANIC, '--body', bodyOf(1)], { env: env(), fetch, ...clock() });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(
-    r.stderr,
-    /\ndfs: warning: tasks_ready failed: network error: fetch failed — check the network; see: dfs store list\n/,
-  );
+  const warning =
+    'dfs: warning: tasks_ready failed: network error: fetch failed — check the network; see: dfs store list\n';
+  assert.equal(r.stderr.split(warning).length, 2, r.stderr);
   assert.deepEqual(paths(calls).slice(-2), [
     '/v3/serp/google/organic/tasks_ready',
     '/v3/serp/google/organic/task_get/advanced/t1',
@@ -585,37 +585,61 @@ function stall(init?: RequestInit): Promise<Response> {
 }
 const tick = () => new Promise((r) => setImmediate(r));
 
-test('a stalled collect of +run ends at the --wait deadline; the last poll gets one 130 s timeout', async (t) => {
+test('free requests of +run end at the --wait deadline; the last poll gets one 130 s timeout', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-11-07T12:00:00Z') });
   // One clock: sleeps and request timers both move mock time.
   const time = { now: () => Date.now(), sleep: async (ms: number) => t.mock.timers.tick(ms) };
-  for (const [wait, listed, limit, why] of [
-    ['20', true, 15_000, 'before the deadline'], // collect at the 5 s poll: 15 s left
-    ['5', false, 130_000, 'in 130 s'], // the last poll, at the deadline: one Transport timeout
-  ] as const) {
+  const cases = [
+    // The 5 s poll of --wait 20 has 15 s left; it ends at the deadline, so its collect is direct.
+    {
+      wait: '20',
+      stalled: '/tasks_ready',
+      listed: true,
+      limit: 15_000,
+      code: 0,
+      line: 'dfs: warning: tasks_ready failed: network error: no answer before the deadline — ',
+    },
+    // Outcome left to the last-poll rule (B4).
+    { wait: '20', stalled: '/task_get/', listed: true, limit: 15_000 },
+    // The last poll starts at the deadline: one Transport timeout from then.
+    {
+      wait: '5',
+      stalled: '/task_get/',
+      listed: false,
+      limit: 130_000,
+      code: 1,
+      line: 'dfs: task t1 not collected: network error: no answer in 130 s — ',
+    },
+  ];
+  for (const { wait, stalled, listed, limit, code, line } of cases) {
+    const name = `--wait ${wait} ${stalled}`;
     const t0 = Date.now();
     const inner = api({ ready: listed ? undefined : () => [] });
-    const { fetch, calls } = fakeFetch((url, init) =>
-      url.includes('/task_get/') ? stall(init) : inner.fetch(url, init),
-    );
+    let first = true; // only the first request to `stalled` stalls
+    const { fetch, calls } = fakeFetch((url, init) => {
+      if (!first || !url.includes(stalled)) return inner.fetch(url, init);
+      first = false;
+      return stall(init);
+    });
     const run = dfs([...ORGANIC, '--body', bodyOf(1), '--wait', wait], {
       env: env(),
       fetch,
       ...time,
     });
-    const gets = () => calls.filter((c) => c.url.includes('/task_get/'));
-    while (gets().length === 0) await tick();
+    while (first) await tick();
+    const signal = calls.find((c) => c.url.includes(stalled))?.init?.signal;
     t.mock.timers.tick(limit - 1);
     await tick();
-    assert.equal(gets()[0].init?.signal?.aborted, false, wait);
+    assert.equal(signal?.aborted, false, name);
     t.mock.timers.tick(1);
     await tick();
-    assert.equal(gets()[0].init?.signal?.aborted, true, wait);
+    assert.equal(signal?.aborted, true, name);
     const r = await run;
-    assert.equal(r.code, 1, r.stderr);
-    assert.equal(gets().length, 1, 'no retry after the deadline');
-    assert.ok(r.stderr.includes(`dfs: task t1 not collected: network error: no answer ${why} — `));
-    assert.equal(Date.now() - t0, 5000 + limit, wait);
+    if (code === undefined) continue;
+    assert.equal(r.code, code, r.stderr);
+    assert.ok(r.stderr.includes(line), r.stderr);
+    assert.equal(calls.filter((c) => c.url.includes(stalled)).length, 1, `${name}: no retry`);
+    assert.equal(Date.now() - t0, 5000 + limit, name);
   }
 });
 

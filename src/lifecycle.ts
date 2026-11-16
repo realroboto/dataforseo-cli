@@ -84,8 +84,7 @@ const tasksOf = (body: unknown): Record<string, unknown>[] =>
   (isRecord(body) && Array.isArray(body.tasks) ? body.tasks : []).filter(isRecord);
 const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-// A request's answer, or undefined after Transport gave up with exit class 1 (network, timeout,
-// deadline): `failed` gets the message. Other errors (exit 2, exit 5) still end the command (B2).
+// Undefined when Transport gave up (exit 1: network, timeout, deadline); exit 2 and 5 still throw.
 async function answered<T>(request: Promise<T>, failed: (message: string) => void) {
   try {
     return await request;
@@ -239,14 +238,15 @@ export async function runTasks(
 
   // Poll at 5, 10, 20, 30, 30 … s until every own task is done or the wait ends.
   const deadline = now() + wait * 1000;
-  // Requests end at the deadline. The last poll starts at it: its requests share one Transport
-  // timeout from then, or it could never answer.
+  // Requests end at the deadline. The last poll starts at it, so its requests share one Transport
+  // timeout from its first request; else it could never answer.
   let closing: number | undefined;
-  const until = () => {
+  const requestEnd = () => {
     if (now() < deadline) return deadline;
     closing ??= now() + TIMEOUT;
     return closing;
   };
+  const said = new Set<string>(); // tasks_ready failure texts already warned: one line each
   let interval = FIRST_POLL;
   while (stop === undefined && pending().length > 0 && now() < deadline) {
     await sleep(Math.min(interval, deadline - now()));
@@ -257,11 +257,14 @@ export async function runTasks(
         catalog,
         ready,
         planned,
-        { sandbox, free: true, estimate: 0, deadline: until() },
+        { sandbox, free: true, estimate: 0, deadline: requestEnd() },
         io,
         warn,
       ),
-      (m) => warn(`tasks_ready failed: ${m}`),
+      (m) => {
+        if (!said.has(m)) warn(`tasks_ready failed: ${m}`);
+        said.add(m);
+      },
     );
     // Only this run's ids: tasks_ready lists every uncollected task in its scope.
     const ids = tasksOf(x?.parsed).flatMap((t) =>
@@ -277,10 +280,10 @@ export async function runTasks(
             return t?.state === 'pending' ? [t] : [];
           });
     // In parallel: Transport caps the requests in flight.
-    const by = until();
+    const end = requestEnd();
     await Promise.all(
       mine.map(async (t) =>
-        tasks.set(t.id, await collectTask(catalog, t, io, warn, messages, missed, by)),
+        tasks.set(t.id, await collectTask(catalog, t, io, warn, messages, missed, end)),
       ),
     );
   }

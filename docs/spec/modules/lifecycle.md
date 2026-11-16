@@ -18,11 +18,11 @@ status: stable
    - **Failed post (agent design, 2026-11-07).** A post whose envelope fails (not 20000, HTTP ≥ 300, not JSON) prints its error line and stops: later posts are not sent, there is no wait, and earlier tasks print as pending. Exit by worst class. Reason: an envelope failure (account, auth, server) repeats on the next post.
    - **Request failures (#38, epic #32 B2).** A free request that fails after Transport retries (network, timeout, deadline: exit class 1) never ends `+run` or `+collect`. The report always prints.
      - Collect call: the task stays pending, marked "last attempt failed". Its report line reads `dfs: task <id> not collected: <message>` (task lines, cut to the budget). The next answered collect clears the mark. The mark lives in memory only; the Store has no column for it.
-     - `tasks_ready`: warning `tasks_ready failed: <message>`; polling goes on.
+     - `tasks_ready`: warning `tasks_ready failed: <message>`, once per text (budget); polling goes on.
      - `id_list`: line `dfs: <message>`, exit class 1; the module keeps its sync time; the next module goes on.
      - Paid post that loses its connection (timeout included): the Transport line, no later post, no poll, then the report and remedy; exit class 1.
      - Exit class 1 for a task still pending at the report with the mark. Exit 2 (missing credentials) and exit 5 still end the command at once.
-     - **Deadline.** `+run` polls and collects pass the `--wait` deadline to Transport. The last poll starts at the deadline: its requests share one Transport timeout (130 s) from its first request. Agent design (#38); reason: at the deadline no time is left, so the last poll could never answer. Worst case: `+run` ends 130 s after `--wait`. `+collect` passes no deadline.
+     - **Deadline.** `+run` polls and collects pass the `--wait` deadline to Transport. A poll that ends at or after the deadline is the last poll. Its requests share one Transport timeout (130 s) from its first request after the deadline. Agent design (#38); reason: at the deadline no time is left, so the last poll could never answer. Worst case: `+run` ends 130 s after `--wait`. `+collect` passes no deadline.
    - **Reuse per post.** Each post of ≤ 100 tasks has its own reuse key, as a plain `task_post` call. A reused post is not sent and not in the guard sum; its tasks keep their Store state, so a repeated `+run` reprints stored collects and waits only for pending tasks. A task row is written once: a replay never resets its state or variant.
    - `+run --dry-run` is not in this build (exit 3).
    - Each collect call (`+run` and `+collect`) uses the variant stored in the task row. Only recovered ids, which have no stored variant, follow the rule below.
