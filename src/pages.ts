@@ -78,7 +78,7 @@ export async function pageAll(
   for (let page = 1; ; page++) {
     if (page > 1) planned = planOf(next);
     const call = await dispatch.prepare(ep, planned);
-    const est = call.est?.usd;
+    const est = call.est?.usd; // null: unknown price; undefined: a reused page, no estimate
     // An unknown price sent under an explicit --max-cost: the real cost so far still stops.
     const unknownOver = est === null && page > 1 && spent >= ceiling;
     const refusal = dispatch.guard([call], spent) ?? (unknownOver ? 'over' : undefined);
