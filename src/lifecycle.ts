@@ -115,15 +115,15 @@ export async function runTasks(
   const dispatch = new Dispatch(catalog, io, store, out, flags);
 
   // Every post is planned (validated) before anything prints or loads.
-  const planned = [];
+  const plans = [];
   for (let i = 0; i < all.length; i += POST_MAX) {
     const tasks = all.slice(i, i + POST_MAX);
-    planned.push(
+    plans.push(
       plan(catalog, post, {}, tasks, { sandbox, validate: !flags['no-validate'], first: i }),
     );
   }
   // In parallel: all plan warnings print before the price tree and estimate warnings (one load).
-  const calls = await Promise.all(planned.map((p) => dispatch.prepare(post, p)));
+  const calls = await Promise.all(plans.map((p) => dispatch.prepare(post, p)));
   // One guard over every post that is sent; a reused post is not in its sum.
   const refusal = dispatch.guard(calls);
   if (refusal) throw new DfsError(4, refusal);

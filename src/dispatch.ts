@@ -163,8 +163,18 @@ export class Dispatch {
     if (rows.warning) warnings.push(rows.warning);
     for (const w of warnings) this.#warn(w);
     const { tasks, messages } = rows;
-    const sent = { id: src.id, parsed, full, cost: 0, exit: 0, lines: [], tasks, messages };
-    return { ...sent, reused: true, status: src.http_status };
+    return {
+      id: src.id,
+      parsed,
+      full,
+      cost: 0,
+      exit: 0,
+      lines: [],
+      tasks,
+      messages,
+      reused: true,
+      status: src.http_status,
+    };
   }
 
   // A free request (tasks_ready, collect, id_list): no Reuse, no guard, no status line; saved
@@ -438,8 +448,8 @@ async function sendPlanned(
   );
   for (const w of warnings) out.warn(w);
   const { tasks, messages } = rows;
-  const sent = { id, parsed, full, cost: row.cost, exit, lines, tasks, messages };
-  return { ...sent, reused: false, status: res.status };
+  const { status } = res;
+  return { id, parsed, full, cost: row.cost, exit, lines, tasks, messages, reused: false, status };
 }
 
 // Saves the reuse row of a stored response; returns its status line.
