@@ -1,8 +1,9 @@
 // --page-all (pricing.md, render.md): one task, sent page by page. `offset` pages up to 10,000,
 // then the endpoint's token from each response (help-center: offset vs offset_token). All pages
 // share one cost ceiling and one Compact output budget.
-import { type CallFlags, ceilingOf, priceTree, reusable, reuseRow, sendPlanned } from './call.ts';
+import type { CallFlags } from './call.ts';
 import type { Catalog, Endpoint } from './catalog.ts';
+import { ceilingOf, priceTree, reusable, reuseRow, sendPlanned } from './dispatch.ts';
 import { firstResult } from './envelope.ts';
 import { DfsError } from './errors.ts';
 import { isRecord } from './json.ts';
@@ -99,6 +100,8 @@ export async function pageAll(
         return out.close(stopLine(page, usd(spent), est.usd, need), 4);
       }
       const sent = await sendPlanned(catalog, ep, planned, est, { sandbox, free }, io, store, out);
+      for (const l of sent.lines) out.line(l);
+      out.exit(sent.exit);
       r = { ...sent, cost: sent.cost ?? est.usd };
     }
     spent += r.cost ?? 0;

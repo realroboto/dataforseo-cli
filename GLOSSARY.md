@@ -27,7 +27,7 @@ A paid request gets the stored response at $0 when the same request fully succee
 _Avoid_: cache, cache hit
 
 **Dispatch**:
-The module that runs one planned call: Reuse check, estimate, cost guard, send, save, task rows, outcome. Lands in epic #32 R5a.
+The module that runs one planned call: Reuse check, estimate, cost guard, send, save, task rows, outcome. Its Fetch free sends the free requests.
 _Avoid_: executor, sender
 
 ### Response and output

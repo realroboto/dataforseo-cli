@@ -171,6 +171,24 @@ test('--dry-run shows the reusable id, or null', async () => {
   assert.equal(await plan('--fresh'), null);
 });
 
+test('--dry-run keeps its JSON object and the rule estimate when a stored response is reusable', async () => {
+  const e = env();
+  const id = (await call(e, NOON, { keyword: 'pizza' })).stderr.match(/saved=(r_\w+)/)?.[1];
+  const plan = async (...flags: string[]) => {
+    const argv = [...LIVE, '--body', '{"keyword":"pizza"}', '--dry-run', ...flags];
+    return JSON.parse((await dfs(argv, { env: e, now: at(NOON) })).stdout);
+  };
+  const dry = await plan();
+  assert.deepEqual(Object.keys(dry), [
+    ...['method', 'url', 'body', 'tasks', 'estimate', 'ceiling', 'guard', 'reuse', 'spec'],
+  ]);
+  assert.deepEqual(dry.estimate, { usd: 0.002, basis: 'rule', price_at: NOON });
+  assert.equal(dry.reuse, id);
+  assert.equal(dry.guard, 'send');
+  // The guard judges the rule estimate, as with no stored response.
+  assert.equal((await plan('--max-cost', '0.001')).guard, 'refuse');
+});
+
 test('a repeated task_post in the window posts nothing and returns the posted tasks', async () => {
   const e = env();
   const argv = ['serp', 'google', 'organic', 'task_post'];

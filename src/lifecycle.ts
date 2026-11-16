@@ -2,16 +2,9 @@
 // post response, waits on `tasks_ready`, and collects only its own task ids. `+collect` collects
 // pending tasks and recovers lost ids through `id_list`.
 import { setTimeout as pause } from 'node:timers/promises';
-import {
-  type CallFlags,
-  ceilingOf,
-  exchange,
-  priceTree,
-  readBody,
-  reusable,
-  reuseRow,
-} from './call.ts';
+import type { CallFlags } from './call.ts';
 import { type Catalog, collectPaths, type Endpoint, isLive, type Level } from './catalog.ts';
+import { ceilingOf, exchange, priceTree, reusable, reuseRow } from './dispatch.ts';
 import { resultsOf, succeeded, tasksOf } from './envelope.ts';
 import { DfsError } from './errors.ts';
 import { isRecord, num } from './json.ts';
@@ -24,7 +17,7 @@ import {
   syncStart,
   type Task,
 } from './ledger.ts';
-import { type Plan, plan } from './planner.ts';
+import { type Plan, plan, readBody } from './planner.ts';
 import { estimate, guard, ruleFor } from './pricing.ts';
 import { command, Output, outcome, taskExit } from './render.ts';
 import type { Io } from './run.ts';

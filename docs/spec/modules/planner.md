@@ -10,6 +10,9 @@ status: stable
 # Planner module
 
 2. **Planner** — pure. Words + flags + body → call plan, or exit 3.
+   - **`--body` (epic #32 D5).** `readBody(ep, arg, io)` reads the tasks: inline JSON, `@file`, or `-` (stdin). The only I/O of the Planner. A JSON object is one task; an array is the batch.
+     - Exit 3: a GET with `--body`; a POST without it; a file or stdin that fails to read; text that is not JSON; JSON that is not an object or array.
+     - Callers: plain call, `--page-all` (through the plain call), `+run`.
    - Validates field names, JSON types and known limits only. Required fields and allowed values exist only as prose in the spec (r34:19), so the API judges them (34:161). That such refusals cost 0 is seen in one case only (open-seo #263, r34:70); charging of 405xx is unverified (r31:115).
    - **Schema resolution (agent design, 2026-11-07).** The fields of an object = the union over its `properties`, `$ref`, `allOf`, `oneOf`, `anyOf` and `discriminator.mapping` targets, with a visited set against cycles. Reason: the `llm_mentions` endpoints keep `target[].domain` and `target[].keyword` only under `discriminator.mapping` of `BaseAiOptimizationLLmMentionsTargetElement`, and each mapped schema's `allOf` points back to that base (spec `55a4ed0`).
    - Schema semantics: OpenAPI 3.0 Schema Objects over the overlaid spec (the vendor file is `openapi: 3.0.1`), not JSON Schema 2020-12. The Planner reads `type`, `nullable`, `properties`, `items`, `additionalProperties`, `$ref`, `allOf`, `oneOf`, `anyOf` and `discriminator`; other keywords are prose to it. `null` is valid only where `nullable: true` (common in spec `55a4ed0`); `null` on a typed node without it is a type fault. A schema with no `type` accepts any value; an object schema with no fields accepts any keys. No vendor-specific rule in the Planner. Pattern: `scripts/check-vendor-spec.py` `check()`.

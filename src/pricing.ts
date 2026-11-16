@@ -2,6 +2,8 @@
 // rules; Cost guard.
 import { isRecord } from './json.ts';
 
+export const USER_DATA = '/v3/appendix/user_data'; // its `price` node is the price tree
+
 export const FREE = new Set([
   'task_get',
   'tasks_ready',

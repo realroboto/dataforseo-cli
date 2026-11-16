@@ -2,7 +2,6 @@
 // (docs/spec/workflows-release.md). Network script; spec.yml runs it weekly, never ci.yml.
 import { appendFileSync } from 'node:fs';
 import { parse } from 'yaml';
-import { USER_DATA } from '../src/call.ts';
 import {
   COMMITS_URL,
   catalogOf,
@@ -19,7 +18,7 @@ import { isRecord } from '../src/json.ts';
 import { HAND_ID_LIST } from '../src/lifecycle.ts';
 import { applyOverlay } from '../src/overlay.ts';
 import { plan, TWENTY_TASK_PATHS } from '../src/planner.ts';
-import { FREE, isFree, RULES, ruleFor } from '../src/pricing.ts';
+import { FREE, isFree, RULES, ruleFor, USER_DATA } from '../src/pricing.ts';
 import { deref, fields } from '../src/schema.ts';
 
 export type Problem = { condition: number; detail: string };

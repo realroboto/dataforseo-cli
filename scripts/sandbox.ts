@@ -8,12 +8,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { exchange } from '../src/call.ts';
 import { collectPaths, type Endpoint, openCatalog, readSnapshot } from '../src/catalog.ts';
+import { Dispatch } from '../src/dispatch.ts';
 import { DfsError, messageOf } from '../src/errors.ts';
 import { isRecord } from '../src/json.ts';
 import { HAND_ID_LIST } from '../src/lifecycle.ts';
 import { plan } from '../src/planner.ts';
+import { Output } from '../src/render.ts';
 import { type Io, run } from '../src/run.ts';
 import { StoreHandle } from '../src/store.ts';
 
@@ -157,7 +158,7 @@ export async function sandboxRun(
   }
   if (only(HAND_ID_LIST)) jobs.push(() => handIdList());
 
-  // The hand path is no dfs command: same plan and exchange as +collect, to the sandbox.
+  // The hand path is no dfs command: same plan and Fetch free as +collect, to the sandbox.
   async function handIdList() {
     const ex = catalog.endpoints.find((e) => e.path === '/v3/serp/id_list')?.op.requestBody
       ?.content?.['application/json']?.schema?.example;
@@ -174,14 +175,12 @@ export async function sandboxRun(
         sandbox: true,
         validate: false,
       });
-      const x = await exchange(
-        catalog,
+      const quiet = { write: () => true };
+      const out = new Output({ stdout: quiet, stderr: quiet });
+      const x = await new Dispatch(catalog, base, store, out, { sandbox: true }).fetchFree(
         ep,
         planned,
-        { sandbox: true, free: true, estimate: 0 },
-        base,
-        store,
-        () => {},
+        true,
       );
       const exit = x.res.status < 300 && errorCodes([x.parsed]).length === 0 ? 0 : 1;
       judge(HAND_ID_LIST, { exit, envelopes: [x.parsed], stderr: `HTTP ${x.res.status}` });
