@@ -63,5 +63,5 @@ The one Store connection of a command: opened on first use, closed by `run()`. C
 _Avoid_: connection pool, DB client
 
 **Task ledger**:
-The module that owns the `task` and `sync` tables. Callers hand it responses; it writes task rows and applies the cost rule. Lands in epic #32 R3.
+The module that owns the `task` and `sync` tables. Callers hand it responses; it writes task rows and applies the cost rule.
 _Avoid_: task store, task tracker

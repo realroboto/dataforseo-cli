@@ -8,3 +8,4 @@
 - [Lifecycle](/spec/modules/lifecycle.md) - `+run` and `+collect` for Standard tasks.
 - [Render](/spec/modules/render.md) - Compact output, budget, stderr lines and exit code.
 - [Envelope](/spec/modules/envelope.md) - Reads a response body: tasks, results, items in one numbering, exit-table code sets.
+- [Task ledger](/spec/modules/ledger.md) - Task rows, task state, cost rule and `id_list` sync window.

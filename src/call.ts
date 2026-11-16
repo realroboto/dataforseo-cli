@@ -9,20 +9,19 @@ import type { Catalog, Endpoint } from './catalog.ts';
 import { firstResult, isAccount, isNotReady, isOk, succeeded, tasksOf } from './envelope.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
+import { posted } from './ledger.ts';
 import { pageAll, pagingOf } from './pages.ts';
 import { type Plan, plan } from './planner.ts';
 import { type Estimate, estimate, guard, isFree, ruleFor } from './pricing.ts';
 import { BUDGET, command, compact } from './render.ts';
 import type { Io } from './run.ts';
 import {
-  insertTasks,
   type Price,
   type Row,
   readPrice,
   reuseRows,
   type StoreHandle,
   save,
-  type Task,
   writePrice,
 } from './store.ts';
 import { authHeader, type Exchange, send } from './transport.ts';
@@ -414,37 +413,16 @@ export async function sendPlanned(
       `dfs: warning: real cost $${row.cost} above estimate $${est.usd} for ${ep.path} — the price rule may be out of date`,
     );
   }
-  // Paid tasks get rows now, for `store spend` and `dfs +collect` (store.md, `task`): a task_post
-  // task is pending, any other paid call is collected at once.
+  // Paid tasks get rows now, for `store spend` and `dfs +collect` (store.md, `task`).
   if (!isFree(ep.path)) {
-    const taskPost = ep.path.endsWith('/task_post');
-    const now = new Date((io.now ?? Date.now)()).toISOString();
-    const rows: Task[] = tasksOf(parsed).flatMap((t) =>
-      typeof t.id === 'string'
-        ? [
-            {
-              id: t.id,
-              post_response: id,
-              path: ep.path,
-              variant: null,
-              state: !isOk(t.status_code) ? 'failed' : taskPost ? 'pending' : 'collected',
-              status_code: typeof t.status_code === 'number' ? t.status_code : null,
-              cost: typeof t.cost === 'number' ? t.cost : null,
-              tag: isRecord(t.data) && typeof t.data.tag === 'string' ? t.data.tag : null,
-              posted_at: now,
-              collected_at: taskPost ? null : now,
-              collect_response: taskPost ? null : id,
-              sandbox: opts.sandbox ? 1 : 0,
-            },
-          ]
-        : [],
-    );
-    try {
-      insertTasks(store, rows);
-    } catch (e) {
-      // The response row holds the cost; dfs +collect recovers the task row through id_list.
-      warnings.push(`dfs: warning: task rows not saved (${messageOf(e)})`);
-    }
+    const { warning } = posted(store, parsed, {
+      id,
+      path: ep.path,
+      variant: null,
+      sandbox: opts.sandbox,
+      time: (io.now ?? Date.now)(),
+    });
+    if (warning) warnings.push(`dfs: warning: ${warning}`);
   }
   const { lines, exit } = outcome(res, parsed, id, ep.method === 'get');
   const taskCount = isRecord(parsed) ? (parsed.tasks_count ?? 0) : 0;

@@ -532,7 +532,10 @@ test('a Store that cannot open: a read before the send exits 5, nothing sent; a 
   const [status, kept, rows, ...rest] = r.stderr.trimEnd().split('\n');
   assert.match(status, / saved=r_\w+$/);
   assert.match(kept, /^dfs: warning: Store write failed \(.+\); response kept in .+unsaved/);
-  assert.match(rows, /^dfs: warning: task rows not saved \(.+\)$/);
+  assert.match(
+    rows,
+    /^dfs: warning: task rows not saved \(.+\); dfs \+collect recovers the tasks$/,
+  );
   assert.deepEqual(rest, []);
 });
 
