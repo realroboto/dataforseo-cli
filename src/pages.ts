@@ -72,7 +72,7 @@ export async function pageAll(
     plan(catalog, ep, params, [t], {
       sandbox: flags.sandbox === true,
       validate: !flags['no-validate'],
-      params: flags.params,
+      query: flags.params,
     });
   // Page 1 validates before the price tree loads: an invalid body exits 3 with nothing sent. The
   // tree loads next, also when page 1 is reused (as before epic #32).

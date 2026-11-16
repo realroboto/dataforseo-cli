@@ -131,9 +131,9 @@ async function route(argv: string[], io: Io): Promise<Command | undefined> {
     return;
   }
   // +run and +collect collect calls send no query parameters: vendor defaults.
-  const only = (['page-all', 'params'] as const).find((f) => values[f] !== undefined);
-  if (only && positionals.some((w) => w === '+run' || w === '+collect')) {
-    throw new DfsError(3, `--${only} applies to endpoint calls only, not +run or +collect`);
+  const flag = (['page-all', 'params'] as const).find((f) => values[f] !== undefined);
+  if (flag && positionals.some((w) => w === '+run' || w === '+collect')) {
+    throw new DfsError(3, `--${flag} applies to endpoint calls only, not +run or +collect`);
   }
   if (positionals.includes('+collect')) {
     if (values.help) {

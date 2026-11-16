@@ -619,8 +619,15 @@ test('--params: an unknown name, a wrong type, a value that is not a scalar, or 
     ],
     [[...TASK_GET, '--params', '[true]'], /^dfs: --params must be a JSON object/],
     [[...TASK_GET, '--params', 'resolve_goto_urls=true'], /^dfs: --params is not JSON/],
-    // An endpoint with no query parameters.
-    [['appendix', 'user_data', '--params', '{"x":1}'], /^dfs: params\.x: unknown query parameter/],
+    // An endpoint with no query parameters refuses any --params, also under --no-validate.
+    [
+      ['appendix', 'user_data', '--params', '{}'],
+      /^dfs: dfs appendix user_data takes no query parameters/,
+    ],
+    [
+      ['appendix', 'user_data', '--params', '{"x":1}', '--no-validate'],
+      /^dfs: dfs appendix user_data takes no query parameters/,
+    ],
     [
       ['serp', 'google', 'organic', '+run', '--params', '{}'],
       /^dfs: --params applies to endpoint calls only/,
@@ -633,7 +640,11 @@ test('--params: an unknown name, a wrong type, a value that is not a scalar, or 
     assert.equal(r.stdout, '');
   }
   assert.equal(calls.length, 0);
-  // --no-validate sends a name or type the spec lacks, with a warning, as for body fields.
+});
+
+test('--params with --no-validate sends a name the spec lacks, with a warning, as body fields', async () => {
+  const { fetch, calls } = fakeFetch(() => new Response(GOT));
+  const e = env();
   const r = await dfs([...TASK_GET, '--params', '{"nope":1}', '--no-validate'], { env: e, fetch });
   assert.equal(r.code, 0, r.stderr);
   assert.match(

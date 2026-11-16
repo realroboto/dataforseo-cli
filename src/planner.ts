@@ -94,9 +94,19 @@ export async function readBody(
 }
 
 // `--params` (catalog.md, query parameters): a JSON object → `?name=value…`, names sorted, so one
-// set of values gives one URL and one Reuse key. Names and types fault like body fields.
+// set of values gives one URL and one Reuse key. Names and types fault like body fields. An
+// endpoint with no query parameters refuses `--params`, as a GET refuses `--body`.
 function queryOf(ep: Endpoint, arg: string | undefined, schemas: Schemas) {
   if (arg === undefined) return { query: '', found: [] };
+  const known = new Map(
+    (ep.op.parameters ?? []).filter((p) => p.in === 'query').map((p) => [p.name, p.schema]),
+  );
+  if (known.size === 0) {
+    throw new DfsError(
+      3,
+      `dfs ${ep.words.join(' ')} takes no query parameters: it takes no --params`,
+    );
+  }
   let v: unknown;
   try {
     v = JSON.parse(arg);
@@ -104,15 +114,12 @@ function queryOf(ep: Endpoint, arg: string | undefined, schemas: Schemas) {
     throw new DfsError(3, `--params is not JSON: ${messageOf(e)}`);
   }
   if (!isRecord(v)) throw new DfsError(3, '--params must be a JSON object');
-  const known = new Map(
-    (ep.op.parameters ?? []).filter((p) => p.in === 'query').map((p) => [p.name, p.schema]),
-  );
   const found: string[] = [];
   const query = new URLSearchParams();
   for (const k of Object.keys(v).sort()) {
     const x = v[k];
-    // shortcut: scalar values only, as every query parameter of spec 8f32867 is a boolean; add
-    // OpenAPI form serialization when the spec gets an array or object query parameter.
+    // shortcut: scalar values only (spec 8f32867 has boolean ones), add OpenAPI form
+    // serialization when the spec gets an array or object query parameter.
     if (!['string', 'number', 'boolean'].includes(typeof x)) {
       throw new DfsError(3, `params.${k}: want a string, number or boolean`);
     }
@@ -136,8 +143,8 @@ export function plan(
   ep: Endpoint,
   params: Record<string, string>,
   tasks: unknown[] | undefined,
-  // first: body index of tasks[0]; params: the --params text (query parameters)
-  opts: { sandbox: boolean; validate: boolean; first?: number; params?: string },
+  // first: body index of tasks[0]; query: the --params text (query parameters)
+  opts: { sandbox: boolean; validate: boolean; first?: number; query?: string },
 ): Plan {
   const base = opts.sandbox
     ? SANDBOX
@@ -171,7 +178,7 @@ export function plan(
     ...faults(t, items, schemas, `body[${(opts.first ?? 0) + i}]`).map(describe),
     ...filterFaults(t, items, schemas, `body[${(opts.first ?? 0) + i}]`),
   ]);
-  const { query, found: queryFound } = queryOf(ep, opts.params, schemas);
+  const { query, found: queryFound } = queryOf(ep, opts.query, schemas);
   for (const [faulty, what] of [
     [found, 'the body'],
     [queryFound, '--params'],
