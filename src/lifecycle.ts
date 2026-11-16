@@ -2,29 +2,24 @@
 // post response, waits on `tasks_ready`, and collects only its own task ids. `+collect` collects
 // pending tasks and recovers lost ids through `id_list`.
 import { setTimeout as pause } from 'node:timers/promises';
-import type { CallFlags } from './call.ts';
 import { type Catalog, collectPaths, type Endpoint, isLive, type Level } from './catalog.ts';
-import { ceilingOf, exchange, priceTree, reusable, reuseRow } from './dispatch.ts';
+import { Dispatch, type SpendFlags } from './dispatch.ts';
 import { resultsOf, succeeded, tasksOf } from './envelope.ts';
 import { DfsError } from './errors.ts';
 import { isRecord, num } from './json.ts';
-import {
-  collected,
-  pendingTasks,
-  posted,
-  recovered,
-  setSync,
-  syncStart,
-  type Task,
-} from './ledger.ts';
-import { type Plan, plan, readBody } from './planner.ts';
-import { estimate, guard, ruleFor } from './pricing.ts';
+import { collected, pendingTasks, recovered, setSync, syncStart, type Task } from './ledger.ts';
+import { plan, readBody } from './planner.ts';
 import { command, Output, outcome, taskExit } from './render.ts';
 import type { Io } from './run.ts';
 import { getRow, type StoreHandle } from './store.ts';
 import { type Exchange, TIMEOUT } from './transport.ts';
 
-export type RunFlags = CallFlags & { wait?: string };
+export type RunFlags = SpendFlags & {
+  body?: string;
+  full?: boolean;
+  'no-validate'?: boolean;
+  wait?: string;
+};
 
 const POST_MAX = 100;
 const WAIT = 90; // s
@@ -68,9 +63,9 @@ function chooseVariant(level: Level, word: string | undefined): string {
 }
 
 // The outcome of a response whose envelope failed (not a JSON object, not 20000, HTTP ≥ 300).
-function envelopeFailure(x: { res: Exchange; parsed: unknown; row: { id: string } }) {
+function envelopeFailure(x: { res: Exchange; parsed: unknown; id: string }) {
   if (succeeded(x.res.status, x.parsed)) return undefined;
-  return outcome(x.res, x.parsed, x.row.id);
+  return outcome(x.res, x.parsed, x.id);
 }
 const outcomeText = (o: { lines: string[] }) => o.lines.join(' ').replace(/^dfs: /, '');
 
@@ -112,98 +107,45 @@ export async function runTasks(
   const all = (await readBody(post, flags.body, io)) ?? [];
   if (all.length === 0) throw new DfsError(3, '--body has no tasks');
   const sandbox = flags.sandbox === true;
-  const { ceiling, explicit } = ceilingOf(flags, io);
   const now = io.now ?? Date.now;
   const sleep = io.sleep ?? pause;
 
   const out = new Output(io);
   const warn = (w: string) => out.warn(w);
+  const dispatch = new Dispatch(catalog, io, store, out, flags);
 
-  const posts: { planned: Plan; reuse?: ReturnType<typeof reusable> }[] = [];
+  // Every post is planned (validated) before anything prints or loads.
+  const plans = [];
   for (let i = 0; i < all.length; i += POST_MAX) {
     const tasks = all.slice(i, i + POST_MAX);
-    const planned = plan(catalog, post, {}, tasks, {
-      sandbox,
-      validate: !flags['no-validate'],
-      first: i,
-    });
-    posts.push({ planned });
+    plans.push(
+      plan(catalog, post, {}, tasks, { sandbox, validate: !flags['no-validate'], first: i }),
+    );
   }
-  for (const w of posts.flatMap((p) => p.planned.warnings)) warn(w);
-  for (const p of posts) {
-    p.reuse = flags.fresh ? undefined : reusable(io, store, p.planned, sandbox);
-  }
-
-  // One guard over every post that is sent; the sandbox estimates 0.
-  const toSend = posts.filter((p) => !p.reuse);
-  const rule = sandbox ? undefined : ruleFor(post.path);
-  const price =
-    rule && !rule.unbounded && toSend.length > 0
-      ? await priceTree(catalog, io, store, true, warn)
-      : undefined;
-  const cost = (tasks: unknown[]) => estimate(rule, tasks, price?.tree, now());
-  if (!sandbox && toSend.length > 0) {
-    const est = cost(toSend.flatMap((p) => p.planned.body ?? []));
-    if (est.warning) warn(est.warning);
-    const refusal = guard(post.path, est, ceiling, explicit);
-    if (refusal) throw new DfsError(4, refusal);
-  }
+  // In parallel: all plan warnings print before the price tree and estimate warnings (one load).
+  const calls = await Promise.all(plans.map((p) => dispatch.prepare(post, p)));
+  // One guard over every post that is sent; a reused post is not in its sum.
+  const refusal = dispatch.guard(calls);
+  if (refusal) throw new DfsError(4, refusal);
 
   const tasks = new Map<string, Task>(); // own tasks, post order
   const messages = new Map<string, string>();
   let stop: number | undefined; // exit class of a failed post; no later post is sent
-  for (const p of posts) {
-    let body: unknown;
-    let postId: string;
-    if (p.reuse) {
-      out.line(reuseRow(catalog, post, p.reuse, io, store, warn));
-      body = JSON.parse(p.reuse.body as string);
-      postId = p.reuse.id;
-    } else {
-      const est = sandbox ? 0 : cost(p.planned.body ?? []).usd;
-      // A lost connection: no later post, no poll; the report and `dfs +collect` follow.
-      const x = await answered(
-        exchange(
-          catalog,
-          post,
-          p.planned,
-          { sandbox, free: sandbox, estimate: est },
-          io,
-          store,
-          warn,
-        ),
-        (m) => {
-          out.line(`dfs: ${m}`);
-          stop = 1;
-        },
-      );
-      if (!x) break;
-      if (!x.saved) {
-        out.full(x.row.body ?? x.res.text);
-        throw new DfsError(5, '5 response not saved — stdout is the only copy');
-      }
-      body = x.parsed;
-      postId = x.row.id;
-      out.line(
-        `dfs: ${x.row.status_code ?? x.res.status} ${post.path} tasks=${isRecord(body) ? (body.tasks_count ?? 0) : 0} cost=$${x.row.cost ?? '?'} est=$${est ?? '?'} saved=${postId}`,
-      );
-      const o = envelopeFailure(x);
-      if (o) {
-        for (const l of o.lines) out.line(l);
-        stop = o.exit;
-      }
+  for (const call of calls) {
+    // A lost connection: no later post, no poll; the report and `dfs +collect` follow.
+    const sent = await answered(dispatch.send(call, { variant, track: true }), (m) => {
+      out.line(`dfs: ${m}`);
+      stop = 1;
+    });
+    if (!sent) break;
+    // Task failures go to the report; an envelope failure prints its lines and stops posting.
+    if (!succeeded(sent.status, sent.parsed)) {
+      for (const l of sent.lines) out.line(l);
+      stop = sent.exit;
     }
     // A replayed post keeps the stored state of its tasks.
-    const stored = posted(store, body, {
-      id: postId,
-      path: post.path,
-      variant: variant || null,
-      sandbox,
-      time: now(),
-    });
-    for (const t of stored.tasks) tasks.set(t.id, t);
-    for (const [id, m] of stored.messages) messages.set(id, m);
-    if (stored.warning) warn(stored.warning);
+    for (const t of sent.tasks) tasks.set(t.id, t);
+    for (const [id, m] of sent.messages) messages.set(id, m);
     if (stop !== undefined) break;
   }
 
@@ -236,17 +178,8 @@ export async function runTasks(
     if (nap > 0) await sleep(nap);
     interval = Math.min(interval * 2, LAST_POLL);
     const planned = plan(catalog, ready, {}, undefined, { sandbox, validate: true });
-    const x = await answered(
-      exchange(
-        catalog,
-        ready,
-        planned,
-        { sandbox, free: true, estimate: 0, deadline: requestEnd() },
-        io,
-        store,
-        warn,
-      ),
-      (m) => readyFailed(m),
+    const x = await answered(dispatch.fetchFree(ready, planned, sandbox, requestEnd()), (m) =>
+      readyFailed(m),
     );
     const o = x && envelopeFailure(x);
     if (o?.exit === 2) {
@@ -254,7 +187,7 @@ export async function runTasks(
       break;
     }
     // Other failures: polling goes on. One warning per text; the key ignores the response id.
-    if (o) readyFailed(outcomeText(o), outcomeText(o).replace(x.row.id, ''));
+    if (o) readyFailed(outcomeText(o), outcomeText(o).replace(x.id, ''));
     // Only this run's ids: tasks_ready lists every uncollected task in its scope.
     const ids = tasksOf(o ? undefined : x?.parsed).flatMap((t) => resultsOf(t).map((r) => r.id));
     // The last poll also asks for own ids not listed, also when its tasks_ready failed:
@@ -272,7 +205,18 @@ export async function runTasks(
       mine.map(async (t) =>
         tasks.set(
           t.id,
-          await collectTask(catalog, t, io, store, warn, messages, missed, accountStop, end),
+          await collectTask(
+            catalog,
+            dispatch,
+            t,
+            io,
+            store,
+            warn,
+            messages,
+            missed,
+            accountStop,
+            end,
+          ),
         ),
       ),
     );
@@ -317,6 +261,7 @@ const param = (ep: Endpoint) => /\{(\w+)\}/.exec(ep.path)?.[1] ?? 'id';
 // another failure marks it in `missed`. Any other answer takes the mark out.
 async function collectTask(
   catalog: Catalog,
+  dispatch: Dispatch,
   t: Task,
   io: Io,
   store: StoreHandle,
@@ -336,9 +281,8 @@ async function collectTask(
   }
   const sandbox = t.sandbox === 1;
   const planned = plan(catalog, ep, { [param(ep)]: t.id }, undefined, { sandbox, validate: true });
-  const x = await answered(
-    exchange(catalog, ep, planned, { sandbox, free: true, estimate: 0, deadline }, io, store, warn),
-    (m) => missed.set(t.id, m),
+  const x = await answered(dispatch.fetchFree(ep, planned, sandbox, deadline), (m) =>
+    missed.set(t.id, m),
   );
   if (!x) return t;
   const o = envelopeFailure(x);
@@ -347,7 +291,7 @@ async function collectTask(
   else if (o) missed.set(t.id, outcomeText(o));
   if (o || !x.saved) return t; // free: the next collect fetches it again
   const update = collected(store, t, {
-    id: x.row.id,
+    id: x.id,
     path: ep.path,
     body: x.parsed,
     time: (io.now ?? Date.now)(),
@@ -445,6 +389,7 @@ export async function collectAll(
   const now = (io.now ?? Date.now)();
   const out = new Output(io);
   const warn = (w: string) => out.warn(w);
+  const dispatch = new Dispatch(catalog, io, store, out); // free requests only
   const messages = new Map<string, string>();
   const missed = new Map<string, string>();
   const accountStop = (lines: string[]) => {
@@ -474,21 +419,10 @@ export async function collectAll(
       ];
       const planned = plan(catalog, ep, {}, body, { sandbox: false, validate: false });
       // A failed request: its line, exit class 1; the module keeps its sync time.
-      const x = await answered(
-        exchange(
-          catalog,
-          ep,
-          planned,
-          { sandbox: false, free: true, estimate: 0 },
-          io,
-          store,
-          warn,
-        ),
-        (m) => {
-          out.line(`dfs: ${m}`);
-          out.exit(1);
-        },
-      );
+      const x = await answered(dispatch.fetchFree(ep, planned, false), (m) => {
+        out.line(`dfs: ${m}`);
+        out.exit(1);
+      });
       if (!x) {
         ok = false;
         break;
@@ -503,7 +437,7 @@ export async function collectAll(
         ok = false;
         break;
       }
-      const o = outcome(x.res, x.parsed, x.row.id);
+      const o = outcome(x.res, x.parsed, x.id);
       if (o.exit !== 0) {
         for (const l of o.lines) out.line(l);
         // A not-ready code (class 6) leaves the pass exit: epic #32 changes no exit here (D0).
@@ -513,7 +447,7 @@ export async function collectAll(
       }
       const results = resultsOf(t);
       // A failed write keeps the module's sync time: the next pass lists these ids again.
-      const warning = recovered(store, results, { id: x.row.id, time: now }, route);
+      const warning = recovered(store, results, { id: x.id, time: now }, route);
       if (warning) {
         warn(warning);
         ok = false;
@@ -538,7 +472,9 @@ export async function collectAll(
   const pending = pendingTasks(store, module ? `/v3/${module}/` : '/v3/');
   // In parallel: Transport caps the requests in flight.
   const tasks = await Promise.all(
-    pending.map((t) => collectTask(catalog, t, io, store, warn, messages, missed, accountStop)),
+    pending.map((t) =>
+      collectTask(catalog, dispatch, t, io, store, warn, messages, missed, accountStop),
+    ),
   );
   const left = tasks.filter((t) => t.state === 'pending').length;
   return report(

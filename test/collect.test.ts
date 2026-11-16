@@ -570,6 +570,16 @@ test('missing credentials during +collect end the command at once: exit 2, no re
   );
 });
 
+test('+collect reads no cost ceiling: an invalid DFS_MAX_COST does not stop it', async () => {
+  const e = env();
+  const { fetch } = api();
+  await post(e, fetch);
+  const bad = { ...e, DFS_MAX_COST: 'lots' };
+  const r = await dfs(['serp', '+collect'], { env: bad, fetch, now: () => now() + 60_000 });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /"id":"t1"/);
+});
+
 test('id_list reaches at most 180 days back', async () => {
   const e = env();
   const { fetch, calls } = api();

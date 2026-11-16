@@ -9,7 +9,7 @@ import { Output } from './render.ts';
 import type { Io } from './run.ts';
 import type { StoreHandle } from './store.ts';
 
-export type CallFlags = PageFlags & {
+type CallFlags = PageFlags & {
   'page-all'?: boolean; // follow offset, then the token, over all pages (src/pages.ts)
 };
 

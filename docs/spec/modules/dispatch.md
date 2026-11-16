@@ -10,6 +10,7 @@ status: stable
 
 10. **Dispatch** — one planned call from the Reuse check to the outcome (`src/dispatch.ts`; epic #32 D5). One Dispatch per command. Built from the Catalog, `io`, the [Store handle](/spec/modules/store.md), the command's [Output](/spec/modules/render.md) and the spend flags (`--sandbox`, `--fresh`, `--max-cost`, `--dry-run`).
    - **Ceiling.** `--max-cost`, else `DFS_MAX_COST`, else $1. "Explicit" (`--max-cost` set) also sends an unknown or unbounded price. An invalid value exits 3 when the Dispatch is built: after `--body` reading, before the plan.
+   - **No spend flags** (`+collect`): the Dispatch sends free requests only. It reads no ceiling, so an invalid `DFS_MAX_COST` never stops `+collect`; a paid call would be refused (ceiling 0). Test: `test/collect.test.ts` "+collect reads no cost ceiling: an invalid DFS_MAX_COST does not stop it".
    - **`prepare(ep, plan)`** → prepared call. The plan is validated first, so an invalid body sends nothing.
      1. Plan warnings go to Output.
      2. Reuse candidate: the newest exit-0 response with the same reuse key in 12 h. Paid path only, not with `--fresh` ([ADR 0003](/adr/0003-reuse-on-by-default.md)).
@@ -28,8 +29,10 @@ status: stable
        4. Ledger `posted` (task context rules); a failed write warns.
        5. outcome through Render.
      - A paid send that loses its connection or times out exits 1 ([ADR 0004](/adr/0004-no-paid-retry-without-cost-0.md)). Line: `connection lost after send … dfs +collect recovers it`.
-     - Returns: response id, parsed body, full text, real cost, exit class, outcome lines, tasks with their `status_message`, reused flag.
+     - Returns: response id, parsed body, full text, real cost, exit class, outcome lines, tasks with their `status_message`, reused flag, HTTP status.
+     - A replay returns the stored HTTP status. `+run` checks the envelope with the HTTP status and the body. It prints the outcome lines only on an envelope failure.
    - **`fetchFree(ep, plan, sandbox, deadline?)`** → parsed body, response id, saved flag, the exchange (HTTP status and text; outcome needs the text). For `tasks_ready`, collect calls and `id_list` (also the `ai_optimization` hand path). No Reuse, no guard, no status line ([Lifecycle](/spec/modules/lifecycle.md)); saved before use. The sandbox flag is per request. A network failure or timeout after Transport retries exits 1; the caller decides per request.
    - **Exchange** (inside): Transport, login redaction of `user_data`, save before print. A good non-sandbox `user_data` response also writes the price tree. The price refresh uses it as Fetch free does: free, estimate 0.
    - **Dry run.** The plain call builds the `--dry-run` JSON: rule estimate, `price_at` and reuse id of the prepared call, the ceiling, the guard result. Nothing is sent. The guard judges the rule estimate also beside a reuse candidate. Test: `test/reuse.test.ts` "--dry-run keeps its JSON object and the rule estimate when a stored response is reusable".
-   - **Callers:** plain call (`src/call.ts`), `--page-all` (`src/pages.ts`; its stop rules stay there), `scripts/sandbox.ts` (Fetch free, hand path). Until epic #32 R5c (#46), Lifecycle still calls the steps: `ceilingOf`, `priceTree`, `reusable`, `reuseRow`, `exchange`. Then the steps turn private.
+   - **Callers:** plain call (`src/call.ts`), `--page-all` (`src/pages.ts`; its stop rules stay there), Lifecycle (`src/lifecycle.ts`), `scripts/sandbox.ts` (Fetch free).
+     - The steps inside are private: ceiling, Reuse check, price tree, exchange, reuse row.

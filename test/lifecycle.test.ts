@@ -439,6 +439,62 @@ test('a repeated +run in the reuse window posts nothing and prints the stored co
   assert.equal(again.stdout, first.stdout);
 });
 
+test('a replayed +run post inserts its missing task rows and keeps the stored ones', async () => {
+  const e = env();
+  const { fetch, calls } = api();
+  const first = await dfs([...ORGANIC, '--body', bodyOf(2)], { env: e, fetch, ...clock() });
+  assert.equal(first.code, 0, first.stderr);
+  // t2's row is lost (a refused task row write): the replay writes it again, pending.
+  const db = new DatabaseSync(join(e.DFS_CONFIG_DIR as string, 'store.db'));
+  db.exec("DELETE FROM task WHERE id = 't2'");
+  db.close();
+  const n = calls.length;
+  const argv = [...ORGANIC, '--body', bodyOf(2), '--wait', '0'];
+  const again = await dfs(argv, { env: e, fetch, ...clock() });
+  assert.equal(again.code, 6, again.stderr);
+  assert.equal(calls.length, n);
+  assert.match(again.stderr, /\ndfs: task t2 pending 20100\n/);
+  assert.deepEqual(
+    tasks(e).map((t) => ({ id: t.id, state: t.state })),
+    [
+      { id: 't1', state: 'collected' },
+      { id: 't2', state: 'pending' },
+    ],
+  );
+});
+
+// Epic #32 D10: a +run post warns as a plain call does, after its status line.
+test('a +run post above its estimate warns after its status line', async () => {
+  const task = { id: 't1', status_code: 20100, status_message: 'Task Created.', cost: 0.002 };
+  const { fetch } = api({ post: envelope([{ ...task, result: null }], 0.002) });
+  const argv = [...ORGANIC, '--body', bodyOf(1), '--wait', '0'];
+  const r = await dfs(argv, { env: env(), fetch, ...clock() });
+  assert.equal(r.code, 6, r.stderr);
+  assert.match(
+    r.stderr,
+    /^dfs: 20000 \/v3\/serp\/google\/organic\/task_post tasks=1 cost=\$0\.002 est=\$0\.0006 saved=r_\w+\ndfs: warning: real cost \$0\.002 above estimate \$0\.0006 for \/v3\/serp\/google\/organic\/task_post — the price rule may be out of date\n/,
+  );
+});
+
+test('a +run post prints its status line before its save warning', async () => {
+  const e = env();
+  const { fetch } = api();
+  const argv = (n: number) => [...ORGANIC, '--body', bodyOf(n), '--wait', '0'];
+  assert.equal((await dfs(argv(1), { env: e, fetch, ...clock() })).code, 6);
+  // Every response insert fails: the post response falls back to unsaved/.
+  const db = new DatabaseSync(join(e.DFS_CONFIG_DIR as string, 'store.db'));
+  db.exec(
+    "CREATE TRIGGER refuse BEFORE INSERT ON response BEGIN SELECT RAISE(ABORT, 'refused'); END",
+  );
+  db.close();
+  const r = await dfs(argv(2), { env: e, fetch, ...clock() });
+  assert.equal(r.code, 6, r.stderr);
+  assert.match(
+    r.stderr,
+    /^dfs: 20000 \/v3\/serp\/google\/organic\/task_post tasks=2 cost=\$0\.0012 est=\$0\.0012 saved=(r_\w+)\ndfs: warning: Store write failed \(refused\); response kept in \S+\/unsaved\/\1\.json, imported on the next run\n/,
+  );
+});
+
 test('collect codes: 20100 and 40602 stay pending, 40403 expires, other codes fail; exit 6', async () => {
   const e = env();
   const codes: Record<string, { status_code: number; status_message: string }> = {

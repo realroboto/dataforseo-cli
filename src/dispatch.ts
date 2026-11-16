@@ -54,6 +54,7 @@ export type Sent = {
   tasks: Task[];
   messages: Map<string, string>; // status_message per task id
   reused: boolean;
+  status: number; // HTTP status; with `parsed`, the envelope check of +run
 };
 
 export class Dispatch {
@@ -67,14 +68,16 @@ export class Dispatch {
   #price?: Promise<Price | undefined>;
   #warn = (w: string) => this.#out.warn(w);
 
-  // An invalid ceiling exits 3 here, before any send.
-  constructor(catalog: Catalog, io: Io, store: StoreHandle, out: Output, flags: SpendFlags) {
-    ({ ceiling: this.ceiling, explicit: this.explicit } = ceilingOf(flags, io));
+  // An invalid ceiling exits 3 here, before any send. No spend flags (+collect): free requests
+  // only, so no ceiling is read; a paid call would be refused.
+  constructor(catalog: Catalog, io: Io, store: StoreHandle, out: Output, flags?: SpendFlags) {
+    const spend = flags ? ceilingOf(flags, io) : { ceiling: 0, explicit: false };
+    ({ ceiling: this.ceiling, explicit: this.explicit } = spend);
     this.#catalog = catalog;
     this.#io = io;
     this.#store = store;
     this.#out = out;
-    this.#flags = flags;
+    this.#flags = flags ?? {};
   }
 
   // Plan warnings, the Reuse candidate, then the rule estimate. The price tree loads once per
@@ -160,7 +163,18 @@ export class Dispatch {
     if (rows.warning) warnings.push(rows.warning);
     for (const w of warnings) this.#warn(w);
     const { tasks, messages } = rows;
-    return { id: src.id, parsed, full, cost: 0, exit: 0, lines: [], tasks, messages, reused: true };
+    return {
+      id: src.id,
+      parsed,
+      full,
+      cost: 0,
+      exit: 0,
+      lines: [],
+      tasks,
+      messages,
+      reused: true,
+      status: src.http_status,
+    };
   }
 
   // A free request (tasks_ready, collect, id_list): no Reuse, no guard, no status line; saved
@@ -172,8 +186,7 @@ export class Dispatch {
   }
 }
 
-// The steps of a call. The exported ones serve Lifecycle (#46) until it runs over Dispatch; then
-// they turn private.
+// The steps of a call.
 
 function parseJson(s: string): unknown {
   try {
@@ -227,12 +240,7 @@ function reuseKey(planned: Plan, sandbox: boolean): string {
 }
 
 // The newest fully successful response of this request in the reuse window.
-export function reusable(
-  io: Io,
-  store: StoreHandle,
-  planned: Plan,
-  sandbox: boolean,
-): Row | undefined {
+function reusable(io: Io, store: StoreHandle, planned: Plan, sandbox: boolean): Row | undefined {
   const since = new Date((io.now ?? Date.now)() - REUSE_WINDOW).toISOString();
   return reuseRows(store, reuseKey(planned, sandbox), since).find((r) => {
     const text = r.body as string;
@@ -261,7 +269,7 @@ function parseUsd(name: string, value: string | undefined): number | undefined {
 }
 
 // The cost ceiling: --max-cost, else DFS_MAX_COST, else $1; `explicit` also sends unknown prices.
-export function ceilingOf(flags: SpendFlags, io: Io): { ceiling: number; explicit: boolean } {
+function ceilingOf(flags: SpendFlags, io: Io): { ceiling: number; explicit: boolean } {
   const explicit = parseUsd('--max-cost', flags['max-cost']);
   const ceiling = explicit ?? parseUsd('DFS_MAX_COST', io.env.DFS_MAX_COST || undefined) ?? 1;
   return { ceiling, explicit: explicit !== undefined };
@@ -269,7 +277,7 @@ export function ceilingOf(flags: SpendFlags, io: Io): { ceiling: number; explici
 
 // One HTTP exchange, saved to the Store before anything prints. A good non-sandbox user_data
 // response also writes the price tree (pricing.md); sandbox prices are dummy data.
-export async function exchange(
+async function exchange(
   catalog: Catalog,
   ep: Endpoint,
   planned: Plan,
@@ -332,7 +340,7 @@ export async function exchange(
 
 // The stored price tree. Before a send it is refreshed first when older than 24 h or absent and
 // credentials exist; a failed refresh warns and keeps the old tree.
-export async function priceTree(
+async function priceTree(
   catalog: Catalog,
   io: Io,
   store: StoreHandle,
@@ -440,11 +448,12 @@ async function sendPlanned(
   );
   for (const w of warnings) out.warn(w);
   const { tasks, messages } = rows;
-  return { id, parsed, full, cost: row.cost, exit, lines, tasks, messages, reused: false };
+  const { status } = res;
+  return { id, parsed, full, cost: row.cost, exit, lines, tasks, messages, reused: false, status };
 }
 
 // Saves the reuse row of a stored response; returns its status line.
-export function reuseRow(
+function reuseRow(
   catalog: Catalog,
   ep: Endpoint,
   src: Row,
