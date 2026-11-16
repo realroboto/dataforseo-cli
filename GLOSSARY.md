@@ -27,8 +27,12 @@ A paid request gets the stored response at $0 when the same request fully succee
 _Avoid_: cache, cache hit
 
 **Dispatch**:
-The module that runs one planned call: Reuse check, estimate, cost guard, send, save, task rows, outcome. Its Fetch free sends the free requests.
+The module that runs one planned call: Reuse check, estimate, cost guard, send, save, task rows, outcome.
 _Avoid_: executor, sender
+
+**Fetch free**:
+The Dispatch step that sends one free request: `tasks_ready`, a collect call, `id_list`. It has no Reuse, no cost guard and no status line. It saves the response before use.
+_Avoid_: free call, raw fetch
 
 ### Response and output
 

@@ -88,14 +88,14 @@ export class Dispatch {
         ? undefined
         : reusable(this.#io, this.#store, planned, sandbox);
     const free = sandbox || isFree(ep.path);
-    const call = { ep, plan: planned, free, reuse };
-    if (reuse && !this.#flags['dry-run']) return { ...call, reuse };
-    if (free) return { ...call, est: { usd: 0, basis: 'rule' } };
+    const base = { ep, plan: planned, free, reuse };
+    if (reuse && !this.#flags['dry-run']) return { ...base, reuse }; // `reuse` again: type narrowing
+    if (free) return { ...base, est: { usd: 0, basis: 'rule' } };
     const rule = ruleFor(ep.path);
     const price = rule && !rule.unbounded ? await this.#priceTree() : undefined;
     const est = estimate(rule, planned.body ?? [], price?.tree, (this.#io.now ?? Date.now)());
     if (est.warning) this.#warn(est.warning);
-    return { ...call, est, priceAt: price?.at };
+    return { ...base, est, priceAt: price?.at };
   }
 
   #priceTree(): Promise<Price | undefined> {
@@ -111,7 +111,9 @@ export class Dispatch {
     if (paid.length === 0) return undefined;
     const unknown = paid.find((e) => e.usd === null);
     const usd = paid.reduce((sum, e) => sum + (e.usd ?? 0), spent);
-    const total = unknown ?? { usd: Math.round(usd * 1e9) / 1e9, basis: 'rule' as const };
+    // One call alone keeps its estimate as is; a sum drops float noise, as `estimate` does.
+    const sum = { usd: Math.round(usd * 1e9) / 1e9, basis: 'rule' as const };
+    const total = unknown ?? (paid.length === 1 && spent === 0 ? paid[0] : sum);
     return guard(calls[0].ep.path, total, this.ceiling, this.explicit);
   }
 

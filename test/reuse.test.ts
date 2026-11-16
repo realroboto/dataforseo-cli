@@ -180,7 +180,15 @@ test('--dry-run keeps its JSON object and the rule estimate when a stored respon
   };
   const dry = await plan();
   assert.deepEqual(Object.keys(dry), [
-    ...['method', 'url', 'body', 'tasks', 'estimate', 'ceiling', 'guard', 'reuse', 'spec'],
+    'method',
+    'url',
+    'body',
+    'tasks',
+    'estimate',
+    'ceiling',
+    'guard',
+    'reuse',
+    'spec',
   ]);
   assert.deepEqual(dry.estimate, { usd: 0.002, basis: 'rule', price_at: NOON });
   assert.equal(dry.reuse, id);

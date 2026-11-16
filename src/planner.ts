@@ -5,7 +5,6 @@ import { text } from 'node:stream/consumers';
 import { type Catalog, concretePath, type Endpoint, isLive } from './catalog.ts';
 import { DfsError, messageOf } from './errors.ts';
 import { isRecord } from './json.ts';
-import type { Io } from './run.ts';
 import { deref, type Fault, faults, fields, type Schema, type Schemas } from './schema.ts';
 
 const SANDBOX = 'https://sandbox.dataforseo.com';
@@ -66,7 +65,7 @@ export function paging(ep: Endpoint, schemas: Schemas): { token?: string } | und
 export async function readBody(
   ep: Endpoint,
   arg: string | undefined,
-  io: Pick<Io, 'stdin'>,
+  io: { stdin: NodeJS.ReadableStream },
 ): Promise<unknown[] | undefined> {
   if (ep.method !== 'post') {
     if (arg !== undefined)

@@ -12,7 +12,7 @@ status: stable
    - **Ceiling.** `--max-cost`, else `DFS_MAX_COST`, else $1. "Explicit" (`--max-cost` set) also sends an unknown or unbounded price. An invalid value exits 3 when the Dispatch is built: after `--body` reading, before the plan.
    - **`prepare(ep, plan)`** → prepared call. The plan is validated first, so an invalid body sends nothing.
      1. Plan warnings go to Output.
-     2. Reuse candidate: paid path only, not with `--fresh`: the newest exit-0 response with the same reuse key in 12 h ([ADR 0003](/adr/0003-reuse-on-by-default.md)).
+     2. Reuse candidate: the newest exit-0 response with the same reuse key in 12 h. Paid path only, not with `--fresh` ([ADR 0003](/adr/0003-reuse-on-by-default.md)).
      3. Rule estimate: $0 for a free path or the sandbox; else rule × price tree ([Pricing](/spec/modules/pricing.md)). A reuse candidate does not change it.
      - A call that replays its candidate (not a dry run) gets no estimate. Reason: the price tree then never loads, or refreshes, for a call that sends nothing (as before epic #32).
      - The price tree loads once per command, on the first estimate that needs it. It refreshes first when older than 24 h and credentials exist, except in a dry run. A failed refresh warns and keeps the old tree.
@@ -26,9 +26,9 @@ status: stable
        3. Real cost above the estimate warns (not in the sandbox).
        4. Ledger `posted` (task context rules); a failed write warns.
        5. outcome through Render.
-     - A paid send that loses its connection or times out exits 1 (`connection lost after send … dfs +collect recovers it`; [ADR 0004](/adr/0004-no-paid-retry-without-cost-0.md)).
+     - A paid send that loses its connection or times out exits 1 ([ADR 0004](/adr/0004-no-paid-retry-without-cost-0.md)). Line: `connection lost after send … dfs +collect recovers it`.
      - Returns: response id, parsed body, full text, real cost, exit class, outcome lines, tasks with their `status_message`, reused flag.
    - **`fetchFree(ep, plan, sandbox, deadline?)`** → parsed body, response id, saved flag, the exchange (HTTP status and text; outcome needs the text). For `tasks_ready`, collect calls and `id_list` (also the `ai_optimization` hand path). No Reuse, no guard, no status line ([Lifecycle](/spec/modules/lifecycle.md)); saved before use. The sandbox flag is per request. A network failure or timeout after Transport retries exits 1; the caller decides per request.
-   - **Exchange** (inside): Transport, login redaction of `user_data`, save before print, the price tree write of a good non-sandbox `user_data` response. The price refresh uses it as Fetch free does: free, estimate 0.
-   - **Dry run.** The plain call builds the `--dry-run` JSON from the prepared call (rule estimate, `price_at`, reuse id), the ceiling and the guard result. Nothing is sent. The guard judges the rule estimate also beside a reuse candidate. Test: `test/reuse.test.ts` "--dry-run keeps its JSON object and the rule estimate when a stored response is reusable".
-   - **Callers:** plain call (`src/call.ts`), `scripts/sandbox.ts` (Fetch free, hand path). `--page-all` and Lifecycle still call the steps (`ceilingOf`, `priceTree`, `reusable`, `reuseRow`, `sendPlanned`, `exchange`) until epic #32 R5b (#45) and R5c (#46); then the steps turn private.
+   - **Exchange** (inside): Transport, login redaction of `user_data`, save before print. A good non-sandbox `user_data` response also writes the price tree. The price refresh uses it as Fetch free does: free, estimate 0.
+   - **Dry run.** The plain call builds the `--dry-run` JSON: rule estimate, `price_at` and reuse id of the prepared call, the ceiling, the guard result. Nothing is sent. The guard judges the rule estimate also beside a reuse candidate. Test: `test/reuse.test.ts` "--dry-run keeps its JSON object and the rule estimate when a stored response is reusable".
+   - **Callers:** plain call (`src/call.ts`), `scripts/sandbox.ts` (Fetch free, hand path). Until epic #32 R5b (#45) and R5c (#46), `--page-all` and Lifecycle still call the steps: `ceilingOf`, `priceTree`, `reusable`, `reuseRow`, `sendPlanned`, `exchange`. Then the steps turn private.

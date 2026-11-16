@@ -9,7 +9,7 @@ status: stable
 
 # Planner module
 
-2. **Planner** — pure. Words + flags + body → call plan, or exit 3.
+2. **Planner** — words + flags + body → call plan, or exit 3. Pure, except `--body` reading.
    - **`--body` (epic #32 D5).** `readBody(ep, arg, io)` reads the tasks: inline JSON, `@file`, or `-` (stdin). The only I/O of the Planner. A JSON object is one task; an array is the batch.
      - Exit 3: a GET with `--body`; a POST without it; a file or stdin that fails to read; text that is not JSON; JSON that is not an object or array.
      - Callers: plain call, `--page-all` (through the plain call), `+run`.
