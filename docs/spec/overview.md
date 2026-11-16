@@ -9,7 +9,7 @@ status: stable
 
 # dfs v1 spec overview
 
-Status: built; `0.1.0` published 2026-11-08 (current status: repo `README.md`). Passed blind `plan-verifier` audits (2026-11-07).
+Status: built; `0.2.1` published 2026-11-16 (current status: repo `README.md`). Passed blind `plan-verifier` audits (2026-11-07).
 Label at publish: `ready-for-agent`.
 Source: the owner's private planning map (tickets 09–13, 28, 31, 34; research 20, 22, 23, 28, 31, 34). Every decision cites its source line there.
 

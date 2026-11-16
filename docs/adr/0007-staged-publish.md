@@ -16,7 +16,7 @@ dfs reads the owner's DataForSEO login from the environment. A malicious dfs ver
 
 ## Decision
 
-- `publish.yml` on tag `v*`: guard (tag = `package.json` version, tag commit on `main`), then `npm stage publish --provenance` by OIDC trusted publishing. No npm token (34:152).
+- `publish.yml` on tag `v*`: guard (tag = `package.json` version, tag commit on `main`), then delete `README.md` (npm page shows no text; owner, 2026-11-16), then `npm stage publish --provenance` by OIDC trusted publishing. No npm token (34:152).
 - npm runs `prepublishOnly` gate first: typecheck → lint → test → spec:check → build → pack check.
 - Version goes out only after owner approves staged version on npm (34:152–153).
 - First release: owner publishes empty `0.0.0` by hand, sets trusted publisher, tags `v0.1.0` within 2 days (34:151).
