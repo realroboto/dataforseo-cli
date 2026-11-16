@@ -174,6 +174,28 @@ test('--page-all: an unknown price under an explicit --max-cost stops once the r
   );
 });
 
+test('--page-all: offset and limit sent as numeric strings page as numbers (--no-validate)', async () => {
+  // 22 rows, total_count 1000: only `limit` ends the paging (page 2 has 7 of 10 rows).
+  for (const task of [
+    { target: 'example.com', offset: 5, limit: 10 },
+    { target: 'example.com', offset: '5', limit: ' 10 ' },
+  ]) {
+    const bodies: unknown[] = [];
+    const { fetch } = fakeFetch((url, init) => {
+      if (url.endsWith('/v3/appendix/user_data')) return json(USER_DATA);
+      const [t] = JSON.parse(String(init?.body));
+      bodies.push(t);
+      const at = Number(t.offset);
+      return json(page(Math.max(0, Math.min(10, 22 - at)), at, 1000, 'search_after_token', 0.0246));
+    });
+    const body = JSON.stringify(task);
+    const argv = ['backlinks', 'backlinks', 'live', '--body', body, '--page-all', '--no-validate'];
+    const r = await dfs(argv, { env: env(), fetch });
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(bodies, [task, { ...task, offset: 15 }], body);
+  }
+});
+
 test('--page-all: a long body is not repeated in the rerun line; output stays within budget', async () => {
   const e = env();
   const a = api(12_000, 'offset_token', 0.132);

@@ -627,13 +627,30 @@ export const ruleFor = (specPath: string): Rule | undefined => BY_PATH.get(specP
 export type Estimate = {
   usd: number | null;
   basis: 'rule' | 'unknown' | 'unbounded';
-  warning?: string; // a rule names a node the price tree lacks
+  warning?: string; // a node the price tree lacks, or a count or page field not a number
 };
+
+// Numeric body field (B1): a JSON number as itself, a decimal string (trimmed) as its number,
+// undefined or null → undefined (absent), any other value → NaN (unreadable). Not Number(): it
+// reads "" as 0 and "0x10" as 16.
+export function readNumber(v: unknown): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'number') return v;
+  const s = typeof v === 'string' ? v.trim() : '';
+  return /^-?\d+(\.\d+)?$/.test(s) ? Number.parseFloat(s) : Number.NaN;
+}
+
+// The count or page field of a task that is set but unreadable; a count field may be an array.
+function unreadable(rule: Rule, task: Record<string, unknown>): string | undefined {
+  const c = rule.results?.field;
+  if (c !== undefined && !Array.isArray(task[c]) && Number.isNaN(readNumber(task[c]))) return c;
+  const p = rule.pages?.field;
+  if (p !== undefined && Number.isNaN(readNumber(task[p]))) return p;
+}
 
 const pageFactor = (pages: Pages | undefined, task: Record<string, unknown>): number => {
   if (!pages) return 1;
-  const want = Number(task[pages.field] ?? pages.size);
-  const n = Math.max(1, Math.ceil((Number.isFinite(want) ? want : pages.size) / pages.size));
+  const n = Math.max(1, Math.ceil((readNumber(task[pages.field]) ?? pages.size) / pages.size));
   return 1 + (n - 1) * pages.next;
 };
 
@@ -667,8 +684,8 @@ function count(r: Results | undefined, task: Record<string, unknown>, now: numbe
   const max = r.max ?? 1;
   const v = r.field === undefined ? undefined : task[r.field];
   if (Array.isArray(v)) return Math.min(v.length, max);
-  if (typeof v === 'number' && Number.isFinite(v)) return Math.min(Math.max(0, v), max);
-  return r.default ?? max;
+  const n = readNumber(v);
+  return n === undefined ? (r.default ?? max) : Math.min(Math.max(0, n), max);
 }
 
 // Node price of one task: the sum of its leaves; undefined for an absent or unknown leaf.
@@ -706,7 +723,15 @@ export function estimate(
   let usd = 0;
   for (const t of tasks.length > 0 ? tasks : [{}]) {
     const task = isRecord(t) ? t : {};
-    const key = task.priority === 2 ? 'priority_high' : 'priority_normal';
+    const bad = unreadable(rule, task);
+    if (bad) {
+      return {
+        usd: null,
+        basis: 'unknown',
+        warning: `price rule ${rule.path}: ${bad} is not a number`,
+      };
+    }
+    const key = readNumber(task.priority) === 2 ? 'priority_high' : 'priority_normal';
     const leaves = isRecord(node) ? node[key] : undefined;
     const price = leafPrice(rule, leaves, task, now);
     if (price === undefined) {
@@ -725,9 +750,11 @@ export function estimate(
       if (!isSet(v) || (x.when && !x.when.test(String(v))) || (x.unless && isSet(task[x.unless]))) {
         continue;
       }
-      const n = typeof v === 'number' ? Math.max(0, v) : 1;
+      // A readable number counts its units; a flag (true, a pattern match) counts 1.
+      const n = readNumber(v) ?? 1;
+      const units = Number.isNaN(n) ? 1 : Math.max(0, n);
       times *= x.times ?? 1;
-      add += n * ((x.add ?? 0) * base + (x.usd ?? 0));
+      add += units * ((x.add ?? 0) * base + (x.usd ?? 0));
     }
     usd += base * pageFactor(rule.pages, task) * times + add;
   }

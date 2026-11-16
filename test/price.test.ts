@@ -436,8 +436,13 @@ test('an unbounded rule is refused like an unknown price unless --max-cost is ex
 });
 
 // Estimate of one task on the stored tree, read through --dry-run.
-const usd = async (e: NodeJS.ProcessEnv, words: string, task: Record<string, unknown>) => {
-  const argv = [...words.split(' '), '--body', JSON.stringify(task), '--dry-run'];
+const usd = async (
+  e: NodeJS.ProcessEnv,
+  words: string,
+  task: Record<string, unknown>,
+  ...flags: string[]
+) => {
+  const argv = [...words.split(' '), '--body', JSON.stringify(task), '--dry-run', ...flags];
   const r = await dfs(argv, { env: e, now: at(NOON) });
   assert.equal(r.code, 0, `${words}: ${r.stderr}`);
   return JSON.parse(r.stdout).estimate.usd;
@@ -561,6 +566,71 @@ test('per_result: limit, input arrays and date spans count the billed items', as
   assert.equal(await usd(e, 'backlinks summary live', forbes), 0.024036);
   // Whois: $0.12 + $0.0012 per domain, 100 by default.
   assert.equal(await usd(e, 'domain_analytics whois overview live', {}), 0.24);
+});
+
+// B1 (epic #32): one numeric reader. A JSON number or a trimmed decimal string reads as its number;
+// null is absent. --no-validate lets such bodies reach the estimate.
+test('--no-validate: count, page, priority and extra fields sent as numeric strings read as their numbers', async () => {
+  const e = env();
+  await loadPrices(e);
+  const nv = '--no-validate';
+  const rk = 'dataforseo_labs google ranked_keywords live';
+  const site = { ...US, target: 'example.com' };
+  // 0.012 + 1000 × 0.00012, as for limit 1000.
+  assert.equal(await usd(e, rk, { ...site, limit: '1000' }, nv), 0.132);
+  assert.equal(await usd(e, rk, { ...site, limit: ' 5 ' }, nv), 0.0126);
+  assert.equal(await usd(e, rk, { ...site, limit: null }, nv), 0.024, 'null: API default 100');
+  // Page fields: depth 15 bills two SERPs; max_crawl_pages counts crawled pages.
+  const pizza = { ...US, keyword: 'pizza' };
+  const organic = 'serp google organic live advanced';
+  assert.equal(await usd(e, organic, { ...pizza, depth: '15' }, nv), 0.0035);
+  const crawl = { target: 'example.com', max_crawl_pages: '100' };
+  assert.equal(await usd(e, 'on_page task_post', crawl, nv), 0.015);
+  const post = 'serp google organic task_post';
+  assert.equal(await usd(e, post, { ...pizza, priority: '2' }, nv), 0.0012);
+  // Extras: a numeric string sets the unit count; a boolean flag keeps count 1.
+  const paa = { ...pizza, people_also_ask_click_depth: '4' };
+  assert.equal(await usd(e, organic, paa, nv), 0.0026);
+  const flag = { ...crawl, load_resources: true };
+  assert.equal(await usd(e, 'on_page task_post', flag, nv), 0.045);
+});
+
+test('--no-validate: an unreadable count or page field makes the price unknown; the guard refuses', async () => {
+  const e = env();
+  await loadPrices(e);
+  const rk = ['dataforseo_labs', 'google', 'ranked_keywords', 'live'];
+  for (const limit of ['abc', '', '0x10', true]) {
+    const body = JSON.stringify({ ...US, target: 'example.com', limit });
+    const argv = [...rk, '--body', body, '--no-validate', '--dry-run'];
+    const r = await dfs(argv, { env: e, now: at(NOON) });
+    assert.equal(r.code, 0, r.stderr);
+    const plan = JSON.parse(r.stdout);
+    assert.deepEqual(plan.estimate, { usd: null, basis: 'unknown', price_at: NOON }, body);
+    assert.equal(plan.guard, 'refuse', body);
+    // The planner's --no-validate warning comes first.
+    assert.ok(
+      r.stderr.endsWith(
+        'dfs: warning: price rule /v3/dataforseo_labs/google/ranked_keywords/live: limit is not a number\n',
+      ),
+      r.stderr,
+    );
+  }
+  // A page field: exit 4 and nothing sent; an explicit --max-cost sends.
+  const { fetch, calls } = fakeFetch(() => json({ status_code: 20000, cost: 0.002, tasks: [] }));
+  const live = [...LIVE, '--body', '{"keyword":"pizza","depth":"ten"}', '--no-validate'];
+  const r = await dfs(live, { env: e, fetch, now: at(NOON) });
+  assert.equal(r.code, 4);
+  assert.ok(
+    r.stderr.endsWith(
+      'dfs: warning: price rule /v3/serp/google/organic/live/advanced: depth is not a number\n' +
+        'dfs: price of /v3/serp/google/organic/live/advanced unknown — pass --max-cost <usd> to send, or --sandbox\n',
+    ),
+    r.stderr,
+  );
+  assert.equal(calls.length, 0);
+  const sent = await dfs([...live, '--max-cost', '1'], { env: e, fetch, now: at(NOON) });
+  assert.equal(sent.code, 0, sent.stderr);
+  assert.equal(calls.length, 1);
 });
 
 test('date spans: one item per month or per group_range period up to today', async () => {
