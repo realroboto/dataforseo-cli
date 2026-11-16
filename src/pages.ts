@@ -57,7 +57,7 @@ export async function pageAll(
       .join(' ');
   const stopLine = (page: number, spent: number, est: number | null, need: number) =>
     `dfs: --page-all stopped before page ${page}: cost so far $${spent} + page estimate $${est ?? '?'} above ceiling $${ceiling}; pages 1-${page - 1} saved — rerun: ${rerun(need)}`;
-  const out = new Output(io, 'pages');
+  const out = new Output(io, 'page-all');
   // The longest stop line keeps its room, so the whole output stays within the budget.
   const big = 99_999.999999;
   out.reserve(stopLine(99_999, big, big, big));

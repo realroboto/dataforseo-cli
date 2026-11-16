@@ -298,11 +298,11 @@ const CUT_MAX = 100; // longest cut line of a page: 5-digit counts, `r_` + 10 he
 const moreLines = (n: number) => `dfs: +${n} more lines — all pages: dfs store list`;
 
 // Output: one per command. It owns the budget: every line it writes counts, and closing lines
-// keep their room. Mode `pages` (--page-all): a stderr line that no longer fits is hidden and
+// keep their room. Mode `page-all`: a stderr line that no longer fits is hidden and
 // counted in the closing `+<n> more lines` line; else every stderr line prints.
 export class Output {
   #io: Pick<Io, 'stdout' | 'stderr'>;
-  #pages: boolean;
+  #pageAll: boolean;
   #used = 0; // characters written to stdout and stderr
   #reserved = 0; // room kept for closing lines
   #hidden = 0;
@@ -310,11 +310,11 @@ export class Output {
   #cut = false; // a response was cut: later responses print nothing
   #exit = 0;
 
-  constructor(io: Pick<Io, 'stdout' | 'stderr'>, mode: 'default' | 'pages' = 'default') {
+  constructor(io: Pick<Io, 'stdout' | 'stderr'>, mode: 'default' | 'page-all' = 'default') {
     this.#io = io;
-    this.#pages = mode === 'pages';
+    this.#pageAll = mode === 'page-all';
     // A page's cut line fits even when no item does.
-    if (this.#pages) this.#reserved = moreLines(99_999).length + 1 + CUT_MAX;
+    if (this.#pageAll) this.#reserved = moreLines(99_999).length + 1 + CUT_MAX;
   }
 
   #write(stream: 'stdout' | 'stderr', text: string): void {
@@ -337,7 +337,7 @@ export class Output {
       if (this.#said.has(key)) return;
       this.#said.add(key);
     }
-    if (this.#pages && text.length + 1 > this.#room()) this.#hidden++;
+    if (this.#pageAll && text.length + 1 > this.#room()) this.#hidden++;
     else this.#write('stderr', `${text}\n`);
   }
 
@@ -399,7 +399,7 @@ export class Output {
     if (RANK[code] > RANK[this.#exit]) this.#exit = code;
   }
 
-  // The hidden-lines line (pages mode), then `final`; returns the exit code: `exit`, else the
+  // The hidden-lines line (`page-all` mode), then `final`; returns the exit code: `exit`, else the
   // worst class.
   close(final?: string, exit = this.#exit): number {
     if (this.#hidden > 0) this.#write('stderr', `${moreLines(this.#hidden)}\n`);

@@ -186,7 +186,7 @@ export async function runTasks(
       );
       if (!x) break;
       if (!x.saved) {
-        io.stdout.write(`${x.row.body ?? x.res.text}\n`);
+        out.full(x.row.body ?? x.res.text);
         throw new DfsError(5, '5 response not saved — stdout is the only copy');
       }
       body = x.parsed;
@@ -513,7 +513,7 @@ export async function collectAll(
       const o = outcome(x.res, x.parsed, x.row.id);
       if (o.exit !== 0) {
         for (const l of o.lines) out.line(l);
-        // Only a failed id_list counts (1, 2); a not-ready code keeps the pass exit, as before.
+        // A not-ready code (class 6) leaves the pass exit: epic #32 changes no exit here (D0).
         if (o.exit !== 6) out.exit(o.exit);
         ok = false;
         break;

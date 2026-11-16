@@ -29,7 +29,12 @@ status: stable
      - Exit: the worst class of the command wins, 2 > 1 > 6 > 0 ([exit-codes-flags.md](/spec/exit-codes-flags.md), combining rule). Exits 3, 4 and 5 end the command at once. The `--page-all` stop closes with exit 4.
      - Close: the hidden-lines line `dfs: +<n> more lines — all pages: dfs store list` (`--page-all` only), the final line, then the exit code.
    - **outcome.** The stderr lines after the status line of one response, and its exit class. Code sets come from Envelope. `get`: 20100 is pending on a get, task created (ok) on a post.
-   - **Task exit rule** (`+run`, `+collect`): 2 if a failed or expired task is in the account class; else 1 if every task failed or expired; else 6 if a task is not collected; else 0. Output combines it with the request classes: a failed post or `id_list` call, an account stop, a pending task whose last collect failed (class 1).
+   - **Task exit rule** (`+run`, `+collect`), first match wins:
+     1. 2: a failed or expired task is in the account class.
+     2. 1: every task failed or expired.
+     3. 6: a task is not collected.
+     4. 0: else.
+     - Output combines it with the request classes. These are a failed post, a failed `id_list` call, an account stop, and a pending task whose last collect failed (class 1).
    - **Line order per call.** Status line first, then the warnings of that call, then the outcome lines. Warnings raised before the send (Planner, price tree, estimate) print at once, before the status line. A Store write warning of a `+run` post or a reused `--page-all` page still prints before its status line (epic #32 D10, R5).
    - `--full`: the exact API response. With `--page-all`, one line per page, like gapi (28:140, 28:171).
    - **Agent design (ticket 12):** `--page-all` (Output `--page-all` mode) writes per page: stderr lines, then its Compact items, from the budget left; room for the closing lines (stop line, `dfs: +<n> more lines — all pages: dfs store list`) is kept first. After the first cut line, later pages print no items; stderr lines that no longer fit are counted in the `+<n> more lines` line. The cut line names its own page row. `--full` drops line breaks of the API text (JSON allows none inside strings).
